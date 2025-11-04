@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{NAME}}"
+  namespace: image-validation
+  labels:
+    image-validation-job: "true"
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 1
+  template:
+    spec:
+      nodeName: "{{NODE_NAME}}"
+      restartPolicy: Never
+      containers:
+      - name: image-compatibility
+        securityContext:
+          seccompProfile:
+            type: RuntimeDefault
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        image: gcr.io/k8s-staging-nfd/node-feature-discovery:v0.17.1
+        command: ["nfd", "compat", "validate-node"]
+        args: "{{ARGS}}"
+        volumeMounts:
+          - mountPath: "/etc/ssl/certs"
+            name: certs
+            readOnly: true
+          - mountPath: /host-boot
+            name: host-boot  
+            readOnly: true
+          - mountPath: /host-etc/os-release
+            name: host-os-release
+            readOnly: true
+          - mountPath: /host-sys
+            name: host-sys
+            readOnly: true
+          - mountPath: /host-usr/lib
+            name: host-usr-lib
+            readOnly: true
+          - mountPath: /host-lib
+            name: host-lib
+            readOnly: true
+          - mountPath: /host-proc
+            name: host-proc
+            readOnly: true
+      volumes:
+      - hostPath:
+          path: /boot
+          type: ""
+        name: host-boot
+      - hostPath:
+          path: /etc/os-release
+          type: ""
+        name: host-os-release
+      - hostPath:
+          path: /sys
+          type: ""
+        name: host-sys
+      - hostPath:
+          path: /usr/lib
+          type: ""
+        name: host-usr-lib
+      - hostPath:
+          path: /lib
+          type: ""
+        name: host-lib
+      - hostPath:
+          path: /proc
+          type: ""
+        name: host-proc
+      - hostPath:
+          path: "/etc/ssl/certs"
+          type: ""
+        name: certs
