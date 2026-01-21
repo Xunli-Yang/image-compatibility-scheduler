@@ -3,28 +3,33 @@ package compatibilityPlugin
 import (
 	"time"
 
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
 	nfdv1alpha1 "sigs.k8s.io/node-feature-discovery/api/nfd/v1alpha1"
 )
 
 const (
-	// PluginName 插件名称
+	// PluginName is the name of this scheduler plugin.
 	PluginName = "ImageCompatibilityFilter"
-	// JobNamespace 检测Job运行的命名空间
+	// NfdMasterNamespace is the namespace where nfd-master runs and NodeFeatureGroup CRs are created.
+	NfdMasterNamespace = "node-feature-discovery"
+	// JobNamespace is the namespace where validation Jobs run.
 	JobNamespace = "image-validation"
-	// JobServiceAccount 检测Job使用的服务账户
+	// JobServiceAccount is the ServiceAccount used by validation Jobs.
 	JobServiceAccount = "image-compatibility-checker"
-	// JobTimeout 检测超时时间
+	// JobTimeout is the timeout for image validation Jobs.
 	JobTimeout = 30 * time.Second
 )
 
-// ImageCompatibilityPlugin 镜像兼容性过滤器
+// ImageCompatibilityPlugin is the main image compatibility filter plugin.
 type ImageCompatibilityPlugin struct {
 	handle     framework.Handle
 	jobManager *JobManager
+	nfdClient  nfdclientset.Interface
 }
 
-// ImageCheckJobSpec 镜像检测Job规格
+// ImageCompatibilityJobSpec describes the spec of an image validation Job.
 type ImageCompatibilityJobSpec struct {
 	Name           string
 	NodeName       string
@@ -36,14 +41,14 @@ type ImageCompatibilityJobSpec struct {
 	ValidationArgs []string
 }
 
-// JobExecutionResult job执行结果
+// JobExecutionResult holds the execution result of a validation Job.
 type JobExecutionResult struct {
 	Success bool
 	Logs    string
 	Error   error
 }
 
-// ValidationResult 检测结果
+// ValidationResult represents a validation outcome.
 type ValidationResult struct {
 	Compatible bool
 	Reason     string
@@ -59,6 +64,24 @@ type Compatibility struct {
 	Tag string `json:"tag,omitempty"`
 	// Description of the compatibility set.
 	Description string `json:"description,omitempty"`
+}
+
+// CompatibilityState keeps the set of nodes that are compatible with
+// the images of a Pod within a single scheduling cycle.
+type CompatibilityState struct {
+	CompatibleNodes map[string]struct{}
+}
+
+// Clone implements the scheduler framework StateData interface.
+func (s *CompatibilityState) Clone() fwk.StateData {
+	if s == nil {
+		return &CompatibilityState{CompatibleNodes: map[string]struct{}{}}
+	}
+	newMap := make(map[string]struct{}, len(s.CompatibleNodes))
+	for k, v := range s.CompatibleNodes {
+		newMap[k] = v
+	}
+	return &CompatibilityState{CompatibleNodes: newMap}
 }
 
 var _ framework.FilterPlugin = &ImageCompatibilityPlugin{}
