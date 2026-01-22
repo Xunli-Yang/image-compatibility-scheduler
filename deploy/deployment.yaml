@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-scheduler
+  namespace: custom-scheduler
+  labels:
+    app: custom-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custom-scheduler
+  template:
+    metadata:
+      labels:
+        app: custom-scheduler
+    spec:
+      serviceAccountName: custom-scheduler
+      priorityClassName: system-cluster-critical
+      containers:
+      - name: scheduler
+        image: docker.io/custom-scheduler:latest
+        imagePullPolicy: Always
+        command:
+        - /usr/local/bin/custom-scheduler
+        - --config=/etc/kubernetes/scheduler-config.yaml
+        - --v=2
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/kubernetes
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 500m
+            memory: 500Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config-volume
+        configMap:
+          name: scheduler-config

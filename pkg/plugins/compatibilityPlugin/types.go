@@ -12,21 +12,22 @@ import (
 const (
 	// PluginName is the name of this scheduler plugin.
 	PluginName = "ImageCompatibilityFilter"
-	// NfdMasterNamespace is the namespace where nfd-master runs and NodeFeatureGroup CRs are created.
-	NfdMasterNamespace = "node-feature-discovery"
 	// JobNamespace is the namespace where validation Jobs run.
 	JobNamespace = "image-validation"
 	// JobServiceAccount is the ServiceAccount used by validation Jobs.
 	JobServiceAccount = "image-compatibility-checker"
 	// JobTimeout is the timeout for image validation Jobs.
 	JobTimeout = 30 * time.Second
+	// NfdMasterLabelSelector is the label selector to find nfd-master pods.
+	NfdMasterLabelSelector = "app=nfd-master"
 )
 
 // ImageCompatibilityPlugin is the main image compatibility filter plugin.
 type ImageCompatibilityPlugin struct {
-	handle     framework.Handle
-	jobManager *JobManager
-	nfdClient  nfdclientset.Interface
+	handle             framework.Handle
+	jobManager         *JobManager
+	nfdClient          nfdclientset.Interface
+	nfdMasterNamespace string
 }
 
 // ImageCompatibilityJobSpec describes the spec of an image validation Job.

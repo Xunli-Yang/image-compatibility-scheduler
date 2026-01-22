@@ -28,7 +28,7 @@ func NewFeatureGroupManagement(artifactClient artifactcli.ArtifactClient) *Featu
 // CreateNodeFeatureGroupsFromArtifact creates temporary NodeFeatureGroup CRs based on
 // compatibility spec in artifact. These CRs are owned by the Pod and will be automatically
 // deleted when the Pod is deleted via Kubernetes garbage collection.
-func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx context.Context, cli nfdclientset.Interface, pod *v1.Pod) ([]nfdv1alpha1.NodeFeatureGroup, error) {
+func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx context.Context, cli nfdclientset.Interface, pod *v1.Pod, namespace string) ([]nfdv1alpha1.NodeFeatureGroup, error) {
 	nodeFeatureGroups, err := fgm.TransferFromArtifact(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transfer from artifact: %v", err)
@@ -53,7 +53,7 @@ func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx conte
 		nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
 		// Create NodeFeatureGroup CRs in nfd-master namespace
-		if nfg, err := cli.NfdV1alpha1().NodeFeatureGroups(NfdMasterNamespace).Create(ctx, &nodeFeatureGroup, metav1.CreateOptions{}); err != nil {
+		if nfg, err := cli.NfdV1alpha1().NodeFeatureGroups(namespace).Create(ctx, &nodeFeatureGroup, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("failed to create NodeFeatureGroup: %v", err)
 		} else {
 			nfgs = append(nfgs, *nfg)

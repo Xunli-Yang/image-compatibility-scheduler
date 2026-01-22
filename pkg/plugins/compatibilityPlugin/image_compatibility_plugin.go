@@ -8,6 +8,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	fwk "k8s.io/kube-scheduler/framework"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
@@ -36,11 +37,51 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 		}
 	}
 
+	// Dynamically discover nfd-master namespace
+	nfdMasterNamespace, err := discoverNfdMasterNamespace(ctx, handle.ClientSet())
+	if err != nil {
+		log.Printf("failed to discover nfd-master namespace: %v, will retry on first use", err)
+		// Continue with empty namespace, will be discovered lazily
+	}
+
 	return &ImageCompatibilityPlugin{
-		handle:     handle,
-		jobManager: NewJobManager(handle.ClientSet(), JobNamespace),
-		nfdClient:  nfdCli,
+		handle:             handle,
+		jobManager:         NewJobManager(handle.ClientSet(), JobNamespace),
+		nfdClient:          nfdCli,
+		nfdMasterNamespace: nfdMasterNamespace,
 	}, nil
+}
+
+// discoverNfdMasterNamespace finds the namespace where nfd-master is running
+// by searching for pods with the nfd-master label selector.
+func discoverNfdMasterNamespace(ctx context.Context, clientSet k8sclient.Interface) (string, error) {
+	// Search in common namespaces first
+	namespaces := []string{"node-feature-discovery", "kube-system", "default"}
+
+	for _, ns := range namespaces {
+		pods, err := clientSet.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: NfdMasterLabelSelector,
+		})
+		if err != nil {
+			continue
+		}
+		if len(pods.Items) > 0 {
+			return ns, nil
+		}
+	}
+
+	// If not found in common namespaces, search all namespaces
+	pods, err := clientSet.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		LabelSelector: NfdMasterLabelSelector,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("nfd-master pod not found with label selector %s", NfdMasterLabelSelector)
+	}
+
+	return pods.Items[0].Namespace, nil
 }
 
 // Name returns the plugin name.
@@ -109,7 +150,13 @@ func getCompatibilityState(cycleState fwk.CycleState) (*CompatibilityState, erro
 // buildCompatibleNodeSet computes the compatible node set based on
 // all container images used by the Pod.
 func (f *ImageCompatibilityPlugin) buildCompatibleNodeSet(ctx context.Context, pod *v1.Pod) (map[string]struct{}, error) {
-	if err := f.createNodeFeatureGroupsForPod(ctx, pod); err != nil {
+	// Ensure nfd-master namespace is discovered
+	namespace, err := f.getNfdMasterNamespace(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nfd-master namespace: %w", err)
+	}
+
+	if err := f.createNodeFeatureGroupsForPod(ctx, pod, namespace); err != nil {
 		return nil, err
 	}
 
@@ -117,15 +164,31 @@ func (f *ImageCompatibilityPlugin) buildCompatibleNodeSet(ctx context.Context, p
 		return nil, err
 	}
 
-	return f.collectCompatibleNodes(ctx, NfdMasterNamespace)
+	return f.collectCompatibleNodes(ctx, namespace)
+}
+
+// getNfdMasterNamespace returns the nfd-master namespace, discovering it if needed.
+func (f *ImageCompatibilityPlugin) getNfdMasterNamespace(ctx context.Context) (string, error) {
+	if f.nfdMasterNamespace != "" {
+		return f.nfdMasterNamespace, nil
+	}
+
+	// Lazy discovery if not set during initialization
+	namespace, err := discoverNfdMasterNamespace(ctx, f.handle.ClientSet())
+	if err != nil {
+		return "", err
+	}
+
+	f.nfdMasterNamespace = namespace
+	return namespace, nil
 }
 
 // createNodeFeatureGroupsForPod creates temporary NodeFeatureGroup CRs for all
 // container images declared in the Pod spec. These CRs will be automatically
 // cleaned up when the Pod is deleted via OwnerReference TTL mechanism.
-func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForPod(ctx context.Context, pod *v1.Pod) error {
+func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForPod(ctx context.Context, pod *v1.Pod, namespace string) error {
 	for _, container := range pod.Spec.Containers {
-		if err := f.createNodeFeatureGroupsForImage(ctx, pod, container.Image); err != nil {
+		if err := f.createNodeFeatureGroupsForImage(ctx, pod, container.Image, namespace); err != nil {
 			return fmt.Errorf("create NodeFeatureGroups for image %s failed: %w", container.Image, err)
 		}
 	}
@@ -134,7 +197,7 @@ func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForPod(ctx context.Con
 
 // createNodeFeatureGroupsForImage creates NodeFeatureGroup CRs for a
 // single image artifact with TTL via OwnerReference to the Pod.
-func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.Context, pod *v1.Pod, imageName string) error {
+func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.Context, pod *v1.Pod, imageName, namespace string) error {
 	ref, err := registry.ParseReference(imageName)
 	if err != nil {
 		return fmt.Errorf("failed to parse image reference %s: %w", imageName, err)
@@ -147,7 +210,7 @@ func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.C
 	)
 
 	mgmt := NewFeatureGroupManagement(ac)
-	if _, err := mgmt.CreateNodeFeatureGroupsFromArtifact(ctx, f.nfdClient, pod); err != nil {
+	if _, err := mgmt.CreateNodeFeatureGroupsFromArtifact(ctx, f.nfdClient, pod, namespace); err != nil {
 		return fmt.Errorf("failed to create NodeFeatureGroups from artifact for image %s: %w", imageName, err)
 	}
 
