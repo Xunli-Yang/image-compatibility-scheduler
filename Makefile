@@ -37,7 +37,7 @@ clean:
 # Build Docker image
 docker-build: build
 	@echo "Building Docker image $(IMAGE)..."
-	@docker build -t $(IMAGE) -f Dockerfile .
+	@DOCKER_BUILDKIT=1 docker build -t $(IMAGE) -f Dockerfile .
 
 # Push Docker image
 docker-push: docker-build
