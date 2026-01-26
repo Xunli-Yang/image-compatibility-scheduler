@@ -16,9 +16,62 @@ data:
     profiles:
     - schedulerName: custom-scheduler
       plugins:
+        queueSort:
+          enabled:
+          - name: PrioritySort
+        preFilter:
+          enabled:
+          - name: NodeResourcesFit
+          - name: NodePorts
+          - name: VolumeRestrictions
+          - name: PodTopologySpread
+          - name: InterPodAffinity
+          - name: VolumeBinding
+          - name: NodeAffinity
         filter:
           enabled:
+          - name: NodeUnschedulable
+          - name: NodeName
+          - name: NodePorts
+          - name: NodeAffinity
+          - name: NodeResourcesFit
+          - name: VolumeRestrictions
+          - name: TaintToleration
+          - name: NodeVolumeLimits
+          - name: VolumeBinding
+          - name: VolumeZone
+          - name: PodTopologySpread
+          - name: InterPodAffinity
           - name: ImageCompatibilityFilter
+        preScore:
+          enabled:
+          - name: InterPodAffinity
+          - name: PodTopologySpread
+          - name: TaintToleration
+          - name: NodeAffinity
+        score:
+          enabled:
+          - name: NodeResourcesBalancedAllocation
+            weight: 1
+          - name: ImageLocality
+            weight: 1
+          - name: InterPodAffinity
+            weight: 1
+          - name: NodeAffinity
+            weight: 1
+          - name: PodTopologySpread
+            weight: 2
+          - name: TaintToleration
+            weight: 1
+        reserve:
+          enabled:
+          - name: VolumeBinding
+        preBind:
+          enabled:
+          - name: VolumeBinding
+        bind:
+          enabled:
+          - name: DefaultBinder
       pluginConfig:
       - name: ImageCompatibilityFilter
         args: {}
