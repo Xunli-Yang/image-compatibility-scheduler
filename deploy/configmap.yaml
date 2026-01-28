@@ -19,10 +19,14 @@ data:
         queueSort:
           enabled:
           - name: PrioritySort
+          disabled:
+          - name: "*"
         preFilter:
           enabled:
           - name: NodeResourcesFit
           - name: NodeAffinity
+          disabled:
+          - name: "*"
         filter:
           enabled:
           - name: NodeUnschedulable
@@ -30,6 +34,12 @@ data:
           - name: NodeAffinity
           - name: TaintToleration
           - name: ImageCompatibilityFilter
+          disabled:
+          - name: "*"
+        preScore:
+          enabled: []
+          disabled:
+          - name: "*"
         score:
           enabled:
           - name: NodeResourcesBalancedAllocation
@@ -38,9 +48,29 @@ data:
             weight: 1
           - name: TaintToleration
             weight: 1
+          disabled:
+          - name: "*"
+        reserve:
+          enabled: []
+          disabled:
+          - name: "*"
+        preBind:
+          enabled: []
+          disabled:
+          - name: "*"
         bind:
           enabled:
           - name: DefaultBinder
+          disabled:
+          - name: "*"
+        postBind:
+          enabled: []
+          disabled:
+          - name: "*"
+        permit:
+          enabled: []
+          disabled:
+          - name: "*"
       pluginConfig:
       - name: ImageCompatibilityFilter
         args: {}
