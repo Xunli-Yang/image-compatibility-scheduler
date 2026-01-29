@@ -7,6 +7,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
 	nfdv1alpha1 "sigs.k8s.io/node-feature-discovery/api/nfd/v1alpha1"
 	artifactcli "sigs.k8s.io/node-feature-discovery/pkg/client-nfd/compat/artifact-client"
@@ -36,23 +37,31 @@ func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx conte
 
 	// Set up OwnerReference for automatic cleanup when Pod is deleted
 	ownerRef := metav1.OwnerReference{
-		APIVersion: "v1",
-		Kind:       "Pod",
-		Name:       pod.Name,
-		UID:        pod.UID,
+		APIVersion:         "v1",
+		Kind:               "Pod",
+		Name:               pod.Name,
+		UID:                pod.UID,
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
 	}
 
 	nfgs := make([]nfdv1alpha1.NodeFeatureGroup, 0)
 	for _, nodeFeatureGroup := range nodeFeatureGroups {
 		// Set metadata with OwnerReference and labels for TTL management
+		if nodeFeatureGroup.ObjectMeta.Annotations == nil {
+			nodeFeatureGroup.ObjectMeta.Annotations = make(map[string]string)
+		}
 		if nodeFeatureGroup.ObjectMeta.Labels == nil {
 			nodeFeatureGroup.ObjectMeta.Labels = make(map[string]string)
 		}
-		nodeFeatureGroup.ObjectMeta.GenerateName = "compat-"
+		nodeFeatureGroup.ObjectMeta.GenerateName = "image-compat-"
+		nodeFeatureGroup.ObjectMeta.Name = ""
 		nodeFeatureGroup.ObjectMeta.Labels["managed-by"] = PluginName
 		nodeFeatureGroup.ObjectMeta.Labels["temporary"] = "true"
 		nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
+		fmt.Printf("Processing NodeFeatureGroup : Name=%q, GenerateName=%q, Namespace=%q",
+			nodeFeatureGroup.ObjectMeta.Name, nodeFeatureGroup.ObjectMeta.GenerateName, nodeFeatureGroup.ObjectMeta.Namespace)
 		// Create NodeFeatureGroup CRs in nfd-master namespace
 		if nfg, err := cli.NfdV1alpha1().NodeFeatureGroups(namespace).Create(ctx, &nodeFeatureGroup, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("failed to create NodeFeatureGroup: %v", err)
