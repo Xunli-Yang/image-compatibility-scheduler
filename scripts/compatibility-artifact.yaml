@@ -1,0 +1,9 @@
+version: v1alpha1
+compatibilities:
+- description: "Image compatibility requirements"
+  rules:
+  - name: "system-os-openeuler-scheduler"
+    matchFeatures:
+    - feature: cpu.model
+      matchExpressions:
+        family: {op: In, value: ["31"]}

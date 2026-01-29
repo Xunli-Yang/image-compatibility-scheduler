@@ -8,8 +8,8 @@ metadata:
 spec:
   schedulerName: custom-scheduler
   containers:
-  - name: nginx
-    image: nginx:latest
+  - name: alpine
+    image: docker.io/leoyy6/alpine:3.19
     resources:
       requests:
         memory: "64Mi"
