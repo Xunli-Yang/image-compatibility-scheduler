@@ -48,6 +48,7 @@ func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx conte
 		if nodeFeatureGroup.ObjectMeta.Labels == nil {
 			nodeFeatureGroup.ObjectMeta.Labels = make(map[string]string)
 		}
+		nodeFeatureGroup.ObjectMeta.GenerateName = "compat-"
 		nodeFeatureGroup.ObjectMeta.Labels["managed-by"] = PluginName
 		nodeFeatureGroup.ObjectMeta.Labels["temporary"] = "true"
 		nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
