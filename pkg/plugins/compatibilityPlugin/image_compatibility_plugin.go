@@ -76,8 +76,10 @@ func discoverNfdMasterNamespace(ctx context.Context, clientSet k8sclient.Interfa
 	if err != nil {
 		return "", fmt.Errorf("failed to list pods: %w", err)
 	}
+	// If not found, return empty namespace with log
 	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("nfd-master pod not found with label selector %s", NfdMasterLabelSelector)
+		log.Printf("nfd-master pod not found with label selector %s", NfdMasterLabelSelector)
+		return "", nil
 	}
 
 	return pods.Items[0].Namespace, nil

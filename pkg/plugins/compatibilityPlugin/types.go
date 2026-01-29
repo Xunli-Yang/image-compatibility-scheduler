@@ -1,8 +1,6 @@
 package compatibilityPlugin
 
 import (
-	"time"
-
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
@@ -12,14 +10,8 @@ import (
 const (
 	// PluginName is the name of this scheduler plugin.
 	PluginName = "ImageCompatibilityFilter"
-	// JobNamespace is the namespace where validation Jobs run.
-	JobNamespace = "image-validation"
-	// JobServiceAccount is the ServiceAccount used by validation Jobs.
-	JobServiceAccount = "image-compatibility-checker"
-	// JobTimeout is the timeout for image validation Jobs.
-	JobTimeout = 30 * time.Second
 	// NfdMasterLabelSelector is the label selector to find nfd-master pods.
-	NfdMasterLabelSelector = "app=nfd-master"
+	NfdMasterLabelSelector = "app.kubernetes.io/name=node-feature-discovery,role=master"
 )
 
 // ImageCompatibilityPlugin is the main image compatibility filter plugin.
