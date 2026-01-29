@@ -25,7 +25,6 @@ const (
 // ImageCompatibilityPlugin is the main image compatibility filter plugin.
 type ImageCompatibilityPlugin struct {
 	handle             framework.Handle
-	jobManager         *JobManager
 	nfdClient          nfdclientset.Interface
 	nfdMasterNamespace string
 }

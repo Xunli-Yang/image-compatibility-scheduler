@@ -16,61 +16,12 @@ data:
     profiles:
     - schedulerName: custom-scheduler
       plugins:
-        queueSort:
-          enabled:
-          - name: PrioritySort
-          disabled:
-          - name: "*"
         preFilter:
           enabled:
-          - name: NodeResourcesFit
-          - name: NodeAffinity
-          disabled:
-          - name: "*"
+          - name: []
         filter:
           enabled:
-          - name: NodeUnschedulable
-          - name: NodeResourcesFit
-          - name: NodeAffinity
-          - name: TaintToleration
           - name: ImageCompatibilityFilter
-          disabled:
-          - name: "*"
-        preScore:
-          enabled: []
-          disabled:
-          - name: "*"
-        score:
-          enabled:
-          - name: NodeResourcesBalancedAllocation
-            weight: 1
-          - name: NodeAffinity
-            weight: 1
-          - name: TaintToleration
-            weight: 1
-          disabled:
-          - name: "*"
-        reserve:
-          enabled: []
-          disabled:
-          - name: "*"
-        preBind:
-          enabled: []
-          disabled:
-          - name: "*"
-        bind:
-          enabled:
-          - name: DefaultBinder
-          disabled:
-          - name: "*"
-        postBind:
-          enabled: []
-          disabled:
-          - name: "*"
-        permit:
-          enabled: []
-          disabled:
-          - name: "*"
       pluginConfig:
       - name: ImageCompatibilityFilter
         args: {}

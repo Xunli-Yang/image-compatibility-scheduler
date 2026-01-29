@@ -46,7 +46,6 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 
 	return &ImageCompatibilityPlugin{
 		handle:             handle,
-		jobManager:         NewJobManager(handle.ClientSet(), JobNamespace),
 		nfdClient:          nfdCli,
 		nfdMasterNamespace: nfdMasterNamespace,
 	}, nil
