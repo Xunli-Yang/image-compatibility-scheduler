@@ -19,7 +19,7 @@ spec:
       priorityClassName: system-cluster-critical
       containers:
       - name: scheduler
-        image: docker.io/custom-scheduler:latest
+        image: docker.io/leoyy6/custom-scheduler:v1.0.0
         imagePullPolicy: Always
         command:
         - /usr/local/bin/custom-scheduler
@@ -36,14 +36,12 @@ spec:
             cpu: 500m
             memory: 500Mi
         livenessProbe:
-          httpGet:
-            path: /healthz
+          tcpSocket:
             port: 10259
           initialDelaySeconds: 15
           periodSeconds: 10
         readinessProbe:
-          httpGet:
-            path: /healthz
+          tcpSocket:
             port: 10259
           initialDelaySeconds: 5
           periodSeconds: 5

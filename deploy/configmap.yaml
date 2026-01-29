@@ -16,9 +16,6 @@ data:
     profiles:
     - schedulerName: custom-scheduler
       plugins:
-        preFilter:
-          enabled:
-          - name: []
         filter:
           enabled:
           - name: ImageCompatibilityFilter
