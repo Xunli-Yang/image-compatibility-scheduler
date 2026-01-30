@@ -21,4 +21,5 @@ data:
           - name: ImageCompatibilityFilter
       pluginConfig:
       - name: ImageCompatibilityFilter
-        args: {}
+        args:
+          plainHttp: true

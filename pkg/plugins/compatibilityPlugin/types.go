@@ -19,32 +19,12 @@ type ImageCompatibilityPlugin struct {
 	handle             framework.Handle
 	nfdClient          nfdclientset.Interface
 	nfdMasterNamespace string
+	args               ImageCompatibilityPluginArgs
 }
 
-// ImageCompatibilityJobSpec describes the spec of an image validation Job.
-type ImageCompatibilityJobSpec struct {
-	Name           string
-	NodeName       string
-	ImageName      string
-	PodName        string
-	Namespace      string
-	TemplatePath   string
-	PlainHttp      bool
-	ValidationArgs []string
-}
-
-// JobExecutionResult holds the execution result of a validation Job.
-type JobExecutionResult struct {
-	Success bool
-	Logs    string
-	Error   error
-}
-
-// ValidationResult represents a validation outcome.
-type ValidationResult struct {
-	Compatible bool
-	Reason     string
-	Error      error
+// ImageCompatibilityPluginArgs holds the arguments for the ImageCompatibilityPlugin.
+type ImageCompatibilityPluginArgs struct {
+	PlainHttp bool `json:"plainHttp,omitempty"`
 }
 
 type Compatibility struct {

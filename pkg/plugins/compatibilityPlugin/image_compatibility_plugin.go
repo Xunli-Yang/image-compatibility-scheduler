@@ -2,6 +2,7 @@ package compatibilityPlugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -20,6 +21,19 @@ import (
 
 // New creates a new ImageCompatibilityPlugin instance.
 func New(ctx context.Context, configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+	// Parse plugin configuration arguments
+	args := ImageCompatibilityPluginArgs{}
+	if configuration != nil {
+		// Convert runtime.Object to the plugin args type
+		configBytes, err := json.Marshal(configuration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal plugin configuration: %w", err)
+		}
+		if err := json.Unmarshal(configBytes, &args); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal plugin configuration: %w", err)
+		}
+	}
+
 	// Initialize NFD client for accessing NodeFeatureGroup CRs.
 	var (
 		nfdCli nfdclientset.Interface
@@ -48,6 +62,7 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 		handle:             handle,
 		nfdClient:          nfdCli,
 		nfdMasterNamespace: nfdMasterNamespace,
+		args:               args,
 	}, nil
 }
 
@@ -206,7 +221,7 @@ func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.C
 
 	ac := artifactcli.New(
 		&ref,
-		artifactcli.WithArgs(artifactcli.Args{PlainHttp: false}),
+		artifactcli.WithArgs(artifactcli.Args{PlainHttp: f.args.PlainHttp}),
 		artifactcli.WithAuthDefault(),
 	)
 
