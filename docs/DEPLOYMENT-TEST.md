@@ -72,6 +72,9 @@ make deploy
 # 或手动部署
 kubectl apply -f deploy/
 ```
+# 或者更新
+kubectl rollout restart deployment custom-scheduler -n custom-scheduler
+```
 
 ### 6. 验证部署
 

@@ -56,4 +56,7 @@ func (s *CompatibilityState) Clone() fwk.StateData {
 	return &CompatibilityState{CompatibleNodes: newMap}
 }
 
-var _ framework.FilterPlugin = &ImageCompatibilityPlugin{}
+var (
+	_ framework.FilterPlugin    = &ImageCompatibilityPlugin{}
+	_ framework.PreFilterPlugin = &ImageCompatibilityPlugin{}
+)

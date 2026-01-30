@@ -16,7 +16,6 @@ import (
 	"oras.land/oras-go/v2/registry"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
 	artifactcli "sigs.k8s.io/node-feature-discovery/pkg/client-nfd/compat/artifact-client"
-	nfdmaster "sigs.k8s.io/node-feature-discovery/pkg/nfd-master"
 )
 
 // New creates a new ImageCompatibilityPlugin instance.
@@ -105,6 +104,37 @@ func (f *ImageCompatibilityPlugin) Name() string {
 	return PluginName
 }
 
+// PreFilter is invoked at the PreFilter extension point.
+func (f *ImageCompatibilityPlugin) PreFilter(ctx context.Context, cycleState fwk.CycleState, pod *v1.Pod, filteredNodes []fwk.NodeInfo) (*framework.PreFilterResult, *fwk.Status) {
+	// Ensure nfd-master namespace is discovered
+	namespace, err := f.getNfdMasterNamespace(ctx)
+	if err != nil {
+		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to get nfd-master namespace: %v", err))
+	}
+
+	// Create NodeFeatureGroup CRs for all container images
+	if err := f.createNodeFeatureGroupsForPod(ctx, pod, namespace); err != nil {
+		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to create NodeFeatureGroups: %v", err))
+	}
+
+	// Collect compatible nodes after NFG creation
+	// Wait a short time for NFD to process the NFG and update status
+	compatibleNodes, err := f.collectCompatibleNodes(ctx, namespace)
+	if err != nil {
+		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes: %v", err))
+	}
+
+	state := &CompatibilityState{CompatibleNodes: compatibleNodes}
+	cycleState.Write(PluginName, state)
+
+	return nil, fwk.NewStatus(fwk.Success)
+}
+
+// PreFilterExtensions returns prefilter extensions, pod add and remove.
+func (f *ImageCompatibilityPlugin) PreFilterExtensions() framework.PreFilterExtensions {
+	return nil
+}
+
 // Filter is invoked at the Filter extension point and rejects nodes
 // that are not present in the compatible node snapshot stored in the
 // scheduling cycle state.
@@ -115,12 +145,14 @@ func (f *ImageCompatibilityPlugin) Filter(ctx context.Context, cycleState fwk.Cy
 		return fwk.NewStatus(fwk.Error, "node not found")
 	}
 
-	state, err := ensureCompatibilityState(ctx, f, cycleState, pod)
+	// Get compatibility state from cycle state
+	state, err := getCompatibilityState(cycleState)
 	if err != nil {
-		log.Printf("failed to prepare compatibility state for pod %s: %v", pod.Name, err)
-		return fwk.NewStatus(fwk.Error, fmt.Sprintf("prepare compatibility state error: %v", err))
+		log.Printf("failed to get compatibility state for pod %s: %v", pod.Name, err)
+		return fwk.NewStatus(fwk.Error, fmt.Sprintf("get compatibility state error: %v", err))
 	}
 
+	// Check if current node is compatible
 	if _, ok := state.CompatibleNodes[node.Name]; !ok {
 		return fwk.NewStatus(
 			fwk.Unschedulable,
@@ -129,23 +161,6 @@ func (f *ImageCompatibilityPlugin) Filter(ctx context.Context, cycleState fwk.Cy
 	}
 
 	return fwk.NewStatus(fwk.Success)
-}
-
-// ensureCompatibilityState ensures that the compatible node set for
-// the given Pod has been computed and stored in CycleState.
-func ensureCompatibilityState(ctx context.Context, f *ImageCompatibilityPlugin, cycleState fwk.CycleState, pod *v1.Pod) (*CompatibilityState, error) {
-	if state, err := getCompatibilityState(cycleState); err == nil {
-		return state, nil
-	}
-
-	compatibleNodes, err := f.buildCompatibleNodeSet(ctx, pod)
-	if err != nil {
-		return nil, err
-	}
-
-	state := &CompatibilityState{CompatibleNodes: compatibleNodes}
-	cycleState.Write(PluginName, state)
-	return state, nil
 }
 
 // getCompatibilityState reads CompatibilityState from CycleState.
@@ -161,26 +176,6 @@ func getCompatibilityState(cycleState fwk.CycleState) (*CompatibilityState, erro
 	}
 
 	return state, nil
-}
-
-// buildCompatibleNodeSet computes the compatible node set based on
-// all container images used by the Pod.
-func (f *ImageCompatibilityPlugin) buildCompatibleNodeSet(ctx context.Context, pod *v1.Pod) (map[string]struct{}, error) {
-	// Ensure nfd-master namespace is discovered
-	namespace, err := f.getNfdMasterNamespace(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get nfd-master namespace: %w", err)
-	}
-
-	if err := f.createNodeFeatureGroupsForPod(ctx, pod, namespace); err != nil {
-		return nil, err
-	}
-
-	if err := runNfdMasterOnce(); err != nil {
-		return nil, err
-	}
-
-	return f.collectCompatibleNodes(ctx, namespace)
 }
 
 // getNfdMasterNamespace returns the nfd-master namespace, discovering it if needed.
@@ -228,22 +223,6 @@ func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.C
 	mgmt := NewFeatureGroupManagement(ac)
 	if _, err := mgmt.CreateNodeFeatureGroupsFromArtifact(ctx, f.nfdClient, pod, namespace); err != nil {
 		return fmt.Errorf("failed to create NodeFeatureGroups from artifact for image %s: %w", imageName, err)
-	}
-
-	return nil
-}
-
-// runNfdMasterOnce runs nfd-master so that NodeFeatureGroup status
-// objects are updated with matching nodes.
-func runNfdMasterOnce() error {
-	args := &nfdmaster.Args{}
-	nfdMaster, err := nfdmaster.NewNfdMaster(nfdmaster.WithArgs(args))
-	if err != nil {
-		return fmt.Errorf("failed to create nfdMaster: %w", err)
-	}
-
-	if err := nfdMaster.Run(); err != nil {
-		return fmt.Errorf("failed to run nfdMaster: %w", err)
 	}
 
 	return nil

@@ -60,7 +60,7 @@ func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx conte
 		nodeFeatureGroup.ObjectMeta.Labels["temporary"] = "true"
 		nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
-		fmt.Printf("Processing NodeFeatureGroup : Name=%q, GenerateName=%q, Namespace=%q",
+		fmt.Printf("Processing NodeFeatureGroup : Name=%q, GenerateName=%q, Namespace=%q\n",
 			nodeFeatureGroup.ObjectMeta.Name, nodeFeatureGroup.ObjectMeta.GenerateName, nodeFeatureGroup.ObjectMeta.Namespace)
 		// Create NodeFeatureGroup CRs in nfd-master namespace
 		if nfg, err := cli.NfdV1alpha1().NodeFeatureGroups(namespace).Create(ctx, &nodeFeatureGroup, metav1.CreateOptions{}); err != nil {
