@@ -62,6 +62,7 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 		nfdClient:          nfdCli,
 		nfdMasterNamespace: nfdMasterNamespace,
 		args:               args,
+		imageToNFGCache:    make(map[string][]string),
 	}, nil
 }
 
@@ -113,18 +114,18 @@ func (f *ImageCompatibilityPlugin) PreFilter(ctx context.Context, cycleState fwk
 	}
 
 	// Create NodeFeatureGroup CRs for all container images
-	if err := f.createNodeFeatureGroupsForPod(ctx, pod, namespace); err != nil {
+	// Store created NFG names in cycle state for later reference
+	createdNFGs, err := f.createNodeFeatureGroupsForPod(ctx, pod, namespace)
+	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to create NodeFeatureGroups: %v", err))
 	}
 
-	// Collect compatible nodes after NFG creation
-	// Wait a short time for NFD to process the NFG and update status
-	compatibleNodes, err := f.collectCompatibleNodes(ctx, namespace)
-	if err != nil {
-		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes: %v", err))
+	// Store NFG names in cycle state for Filter phase
+	state := &CompatibilityState{
+		CompatibleNodes: make(map[string]struct{}),
+		CreatedNFGs:     createdNFGs,
+		Namespace:       namespace,
 	}
-
-	state := &CompatibilityState{CompatibleNodes: compatibleNodes}
 	cycleState.Write(PluginName, state)
 
 	return nil, fwk.NewStatus(fwk.Success)
@@ -150,6 +151,15 @@ func (f *ImageCompatibilityPlugin) Filter(ctx context.Context, cycleState fwk.Cy
 	if err != nil {
 		log.Printf("failed to get compatibility state for pod %s: %v", pod.Name, err)
 		return fwk.NewStatus(fwk.Error, fmt.Sprintf("get compatibility state error: %v", err))
+	}
+
+	// If compatible nodes haven't been computed yet, compute them now
+	if len(state.CompatibleNodes) == 0 && len(state.CreatedNFGs) > 0 {
+		compatibleNodes, err := f.collectCompatibleNodesFromNFGs(ctx, state.Namespace, state.CreatedNFGs)
+		if err != nil {
+			return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes from NFGs: %v", err))
+		}
+		state.CompatibleNodes = compatibleNodes
 	}
 
 	// Check if current node is compatible
@@ -197,21 +207,83 @@ func (f *ImageCompatibilityPlugin) getNfdMasterNamespace(ctx context.Context) (s
 // createNodeFeatureGroupsForPod creates temporary NodeFeatureGroup CRs for all
 // container images declared in the Pod spec. These CRs will be automatically
 // cleaned up when the Pod is deleted via OwnerReference TTL mechanism.
-func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForPod(ctx context.Context, pod *v1.Pod, namespace string) error {
+func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForPod(ctx context.Context, pod *v1.Pod, namespace string) ([]string, error) {
+	var createdNFGs []string
 	for _, container := range pod.Spec.Containers {
-		if err := f.createNodeFeatureGroupsForImage(ctx, pod, container.Image, namespace); err != nil {
-			return fmt.Errorf("create NodeFeatureGroups for image %s failed: %w", container.Image, err)
+		nfgNames, err := f.createNodeFeatureGroupsForImage(ctx, pod, container.Image, namespace)
+		if err != nil {
+			return nil, fmt.Errorf("create NodeFeatureGroups for image %s failed: %w", container.Image, err)
+		}
+		createdNFGs = append(createdNFGs, nfgNames...)
+	}
+	return createdNFGs, nil
+}
+
+// updateCacheForImage updates the cache for a specific image with the given NFG names
+func (f *ImageCompatibilityPlugin) updateCacheForImage(imageName string, nfgNames []string) {
+	if len(nfgNames) == 0 {
+		return
+	}
+
+	f.imageToNFGCacheMutex.Lock()
+	f.imageToNFGCache[imageName] = nfgNames
+	f.imageToNFGCacheMutex.Unlock()
+	log.Printf("Cached NFGs %v for image %s", nfgNames, imageName)
+}
+
+// removeFromCache removes an image from the cache
+func (f *ImageCompatibilityPlugin) removeFromCache(imageName string) {
+	f.imageToNFGCacheMutex.Lock()
+	delete(f.imageToNFGCache, imageName)
+	f.imageToNFGCacheMutex.Unlock()
+	log.Printf("Removed image %s from cache", imageName)
+}
+
+// getValidCachedNFGs returns valid NFGs from cache for a specific image
+func (f *ImageCompatibilityPlugin) getValidCachedNFGs(ctx context.Context, imageName, namespace string) ([]string, bool) {
+	f.imageToNFGCacheMutex.RLock()
+	cachedNFGs, found := f.imageToNFGCache[imageName]
+	f.imageToNFGCacheMutex.RUnlock()
+
+	if !found || len(cachedNFGs) == 0 {
+		return nil, false
+	}
+
+	// Verify all cached NFGs still exist
+	validNFGs := []string{}
+	for _, nfgName := range cachedNFGs {
+		if _, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{}); err == nil {
+			validNFGs = append(validNFGs, nfgName)
 		}
 	}
-	return nil
+
+	if len(validNFGs) == 0 {
+		// All cached NFGs are invalid
+		f.removeFromCache(imageName)
+		return nil, false
+	}
+
+	// Update cache with only valid NFGs if some were invalid
+	if len(validNFGs) != len(cachedNFGs) {
+		f.updateCacheForImage(imageName, validNFGs)
+		log.Printf("Updated cache for image %s: removed %d invalid NFGs", imageName, len(cachedNFGs)-len(validNFGs))
+	}
+
+	return validNFGs, true
 }
 
 // createNodeFeatureGroupsForImage creates NodeFeatureGroup CRs for a
 // single image artifact with TTL via OwnerReference to the Pod.
-func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.Context, pod *v1.Pod, imageName, namespace string) error {
+func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.Context, pod *v1.Pod, imageName, namespace string) ([]string, error) {
+	// Check cache first
+	if validNFGs, found := f.getValidCachedNFGs(ctx, imageName, namespace); found {
+		log.Printf("Reusing cached NFGs %v for image %s", validNFGs, imageName)
+		return validNFGs, nil
+	}
+
 	ref, err := registry.ParseReference(imageName)
 	if err != nil {
-		return fmt.Errorf("failed to parse image reference %s: %w", imageName, err)
+		return nil, fmt.Errorf("failed to parse image reference %s: %w", imageName, err)
 	}
 
 	ac := artifactcli.New(
@@ -221,28 +293,37 @@ func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.C
 	)
 
 	mgmt := NewFeatureGroupManagement(ac)
-	if _, err := mgmt.CreateNodeFeatureGroupsFromArtifact(ctx, f.nfdClient, pod, namespace); err != nil {
-		return fmt.Errorf("failed to create NodeFeatureGroups from artifact for image %s: %w", imageName, err)
+	nfgs, err := mgmt.CreateNodeFeatureGroupsFromArtifact(ctx, f.nfdClient, pod, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create NodeFeatureGroups from artifact for image %s: %w", imageName, err)
 	}
 
-	return nil
+	// Extract NFG names and update cache
+	var nfgNames []string
+	for _, nfg := range nfgs {
+		nfgNames = append(nfgNames, nfg.Name)
+	}
+
+	// Update cache with all NFG names
+	f.updateCacheForImage(imageName, nfgNames)
+
+	return nfgNames, nil
 }
 
-// collectCompatibleNodes computes the intersection of node names
-// across all NodeFeatureGroup status objects, yielding the set of
-// nodes that are compatible with all referenced images.
-func (f *ImageCompatibilityPlugin) collectCompatibleNodes(ctx context.Context, namespace string) (map[string]struct{}, error) {
-	nfgList, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list NodeFeatureGroups: %w", err)
-	}
-
+// collectCompatibleNodesFromNFGs computes compatible nodes from specific NFGs(take the intersection)
+func (f *ImageCompatibilityPlugin) collectCompatibleNodesFromNFGs(ctx context.Context, namespace string, nfgNames []string) (map[string]struct{}, error) {
 	var (
 		intersection map[string]struct{}
 		firstGroup   = true
 	)
 
-	for _, nfg := range nfgList.Items {
+	for _, nfgName := range nfgNames {
+		nfg, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{})
+		if err != nil {
+			// If NFG not found, skip it (might have been deleted)
+			continue
+		}
+
 		currentGroup := make(map[string]struct{})
 		for _, n := range nfg.Status.Nodes {
 			currentGroup[n.Name] = struct{}{}

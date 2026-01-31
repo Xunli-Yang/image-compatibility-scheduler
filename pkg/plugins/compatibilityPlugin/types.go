@@ -1,6 +1,8 @@
 package compatibilityPlugin
 
 import (
+	"sync"
+
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
@@ -16,10 +18,12 @@ const (
 
 // ImageCompatibilityPlugin is the main image compatibility filter plugin.
 type ImageCompatibilityPlugin struct {
-	handle             framework.Handle
-	nfdClient          nfdclientset.Interface
-	nfdMasterNamespace string
-	args               ImageCompatibilityPluginArgs
+	handle               framework.Handle
+	nfdClient            nfdclientset.Interface
+	nfdMasterNamespace   string
+	args                 ImageCompatibilityPluginArgs
+	imageToNFGCache      map[string][]string // Cache: image -> list of NFG names
+	imageToNFGCacheMutex sync.RWMutex        // Mutex to protect cache access
 }
 
 // ImageCompatibilityPluginArgs holds the arguments for the ImageCompatibilityPlugin.
@@ -42,18 +46,32 @@ type Compatibility struct {
 // the images of a Pod within a single scheduling cycle.
 type CompatibilityState struct {
 	CompatibleNodes map[string]struct{}
+	CreatedNFGs     []string // Names of created NodeFeatureGroup CRs
+	Namespace       string   // Namespace where NFGs were created
 }
 
 // Clone implements the scheduler framework StateData interface.
 func (s *CompatibilityState) Clone() fwk.StateData {
 	if s == nil {
-		return &CompatibilityState{CompatibleNodes: map[string]struct{}{}}
+		return &CompatibilityState{
+			CompatibleNodes: map[string]struct{}{},
+			CreatedNFGs:     []string{},
+		}
 	}
 	newMap := make(map[string]struct{}, len(s.CompatibleNodes))
 	for k, v := range s.CompatibleNodes {
 		newMap[k] = v
 	}
-	return &CompatibilityState{CompatibleNodes: newMap}
+
+	// Deep copy CreatedNFGs slice
+	newCreatedNFGs := make([]string, len(s.CreatedNFGs))
+	copy(newCreatedNFGs, s.CreatedNFGs)
+
+	return &CompatibilityState{
+		CompatibleNodes: newMap,
+		CreatedNFGs:     newCreatedNFGs,
+		Namespace:       s.Namespace,
+	}
 }
 
 var (
