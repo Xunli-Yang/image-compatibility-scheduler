@@ -121,12 +121,17 @@ func (f *ImageCompatibilityPlugin) PreFilter(ctx context.Context, cycleState fwk
 		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to create NodeFeatureGroups: %v", err))
 	}
 
-	// Store NFG names in cycle state for Filter phase
+	// Collect compatible nodes (with retry logic built in)
+	compatibleNodes, err := f.collectCompatibleNodesFromNFGs(ctx, namespace, createdNFGs)
+	if err != nil {
+		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes from NFGs: %v", err))
+	}
+
+	// Store NFG names and compatible nodes in cycle state for Filter phase
 	state := &CompatibilityState{
-		CompatibleNodes: make(map[string]struct{}),
+		CompatibleNodes: compatibleNodes,
 		CreatedNFGs:     createdNFGs,
 		Namespace:       namespace,
-		CreatedAt:       metav1.Now(),
 	}
 	cycleState.Write(PluginName, state)
 
@@ -154,20 +159,14 @@ func (f *ImageCompatibilityPlugin) Filter(ctx context.Context, cycleState fwk.Cy
 		log.Printf("failed to get compatibility state for pod %s: %v", pod.Name, err)
 		return fwk.NewStatus(fwk.Error, fmt.Sprintf("get compatibility state error: %v", err))
 	}
-	// Check how much time has passed since NFGs were created
-	timeSinceCreation := time.Since(state.CreatedAt.Time)
 
-	// If compatible nodes haven't been computed yet, compute them now
-	if len(state.CompatibleNodes) == 0 && len(state.CreatedNFGs) > 0 {
-		if timeSinceCreation < NfdUpdateGracePeriod {
-			log.Printf("Waiting for NFD to update NodeFeatureGroup status for pod %s, elapsed time: %v", pod.Name, timeSinceCreation)
-			return fwk.NewStatus(fwk.UnschedulableAndUnresolvable, fmt.Sprintf("waiting for NFD to update NodeFeatureGroup status, elapsed time: %v", timeSinceCreation))
-		}
-		compatibleNodes, err := f.collectCompatibleNodesFromNFGs(ctx, state.Namespace, state.CreatedNFGs)
-		if err != nil {
-			return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes from NFGs: %v", err))
-		}
-		state.CompatibleNodes = compatibleNodes
+	// If no compatible nodes found, reject the node
+	if len(state.CompatibleNodes) == 0 {
+		log.Printf("No compatible nodes found for pod %s", pod.Name)
+		return fwk.NewStatus(
+			fwk.Unschedulable,
+			fmt.Sprintf("node %s is not compatible with pod images", node.Name),
+		)
 	}
 
 	// Check if current node is compatible
@@ -318,41 +317,72 @@ func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.C
 	return nfgNames, nil
 }
 
-// collectCompatibleNodesFromNFGs computes compatible nodes from specific NFGs(take the intersection)
+// collectCompatibleNodesFromNFGs computes compatible nodes from specific NFGs with retry logic
 func (f *ImageCompatibilityPlugin) collectCompatibleNodesFromNFGs(ctx context.Context, namespace string, nfgNames []string) (map[string]struct{}, error) {
-	var (
-		intersection map[string]struct{}
-		firstGroup   = true
-	)
+	startTime := time.Now()
+	maxWait := NfdUpdateGracePeriod
+	retryInterval := 500 * time.Millisecond
+
+	for attempt := 0; time.Since(startTime) < maxWait; attempt++ {
+		intersection := f.computeIntersection(ctx, namespace, nfgNames)
+
+		if len(intersection) > 0 {
+			log.Printf("Found %d compatible nodes after %v", len(intersection), time.Since(startTime))
+			return intersection, nil
+		}
+
+		// Wait and retry
+		if time.Since(startTime) < maxWait {
+			log.Printf("No compatible nodes, waiting (attempt %d, elapsed: %v)", attempt+1, time.Since(startTime))
+			time.Sleep(retryInterval)
+		}
+	}
+
+	log.Printf("No compatible nodes found after waiting %v", maxWait)
+	return make(map[string]struct{}), nil
+}
+
+// computeIntersection computes intersection of nodes from all NFGs
+func (f *ImageCompatibilityPlugin) computeIntersection(ctx context.Context, namespace string, nfgNames []string) map[string]struct{} {
+	var intersection map[string]struct{}
+	first := true
 
 	for _, nfgName := range nfgNames {
-		nfg, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{})
-		if err != nil {
-			// If NFG not found, skip it (might have been deleted)
+		nodes, err := f.getNFGNodes(ctx, namespace, nfgName)
+		if err != nil || len(nodes) == 0 {
 			continue
 		}
 
-		currentGroup := make(map[string]struct{})
-		for _, n := range nfg.Status.Nodes {
-			currentGroup[n.Name] = struct{}{}
-		}
-
-		if firstGroup {
-			intersection = currentGroup
-			firstGroup = false
+		if first {
+			intersection = nodes
+			first = false
 			continue
 		}
 
-		for name := range intersection {
-			if _, ok := currentGroup[name]; !ok {
-				delete(intersection, name)
+		// Intersect with current nodes
+		for node := range intersection {
+			if _, ok := nodes[node]; !ok {
+				delete(intersection, node)
 			}
 		}
 	}
 
 	if intersection == nil {
-		intersection = make(map[string]struct{})
+		return make(map[string]struct{})
+	}
+	return intersection
+}
+
+// getNFGNodes retrieves nodes from a specific NFG
+func (f *ImageCompatibilityPlugin) getNFGNodes(ctx context.Context, namespace, nfgName string) (map[string]struct{}, error) {
+	nfg, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
 	}
 
-	return intersection, nil
+	nodes := make(map[string]struct{})
+	for _, n := range nfg.Status.Nodes {
+		nodes[n.Name] = struct{}{}
+	}
+	return nodes, nil
 }
