@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -125,6 +126,7 @@ func (f *ImageCompatibilityPlugin) PreFilter(ctx context.Context, cycleState fwk
 		CompatibleNodes: make(map[string]struct{}),
 		CreatedNFGs:     createdNFGs,
 		Namespace:       namespace,
+		CreatedAt:       metav1.Now(),
 	}
 	cycleState.Write(PluginName, state)
 
@@ -152,9 +154,15 @@ func (f *ImageCompatibilityPlugin) Filter(ctx context.Context, cycleState fwk.Cy
 		log.Printf("failed to get compatibility state for pod %s: %v", pod.Name, err)
 		return fwk.NewStatus(fwk.Error, fmt.Sprintf("get compatibility state error: %v", err))
 	}
+	// Check how much time has passed since NFGs were created
+	timeSinceCreation := time.Since(state.CreatedAt.Time)
 
 	// If compatible nodes haven't been computed yet, compute them now
 	if len(state.CompatibleNodes) == 0 && len(state.CreatedNFGs) > 0 {
+		if timeSinceCreation < NfdUpdateGracePeriod {
+			log.Printf("Waiting for NFD to update NodeFeatureGroup status for pod %s, elapsed time: %v", pod.Name, timeSinceCreation)
+			return fwk.NewStatus(fwk.UnschedulableAndUnresolvable, fmt.Sprintf("waiting for NFD to update NodeFeatureGroup status, elapsed time: %v", timeSinceCreation))
+		}
 		compatibleNodes, err := f.collectCompatibleNodesFromNFGs(ctx, state.Namespace, state.CreatedNFGs)
 		if err != nil {
 			return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes from NFGs: %v", err))
