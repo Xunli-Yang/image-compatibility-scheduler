@@ -9,7 +9,7 @@ spec:
   schedulerName: custom-scheduler
   containers:
   - name: alpine
-    image: 192.168.200.184:5000/leoyy6/alpine:3.19
+    image: docker.io/leoyy6/alpine:3.19
     resources:
       requests:
         memory: "64Mi"

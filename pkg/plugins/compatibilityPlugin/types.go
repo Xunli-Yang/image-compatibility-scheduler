@@ -2,7 +2,9 @@ package compatibilityPlugin
 
 import (
 	"sync"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
@@ -14,6 +16,8 @@ const (
 	PluginName = "ImageCompatibilityFilter"
 	// NfdMasterLabelSelector is the label selector to find nfd-master pods.
 	NfdMasterLabelSelector = "app.kubernetes.io/name=node-feature-discovery,role=master"
+	// NfdUpdateGracePeriod is the grace period for NFD updates.
+	NfdUpdateGracePeriod = 3 * time.Second
 )
 
 // ImageCompatibilityPlugin is the main image compatibility filter plugin.
@@ -46,8 +50,9 @@ type Compatibility struct {
 // the images of a Pod within a single scheduling cycle.
 type CompatibilityState struct {
 	CompatibleNodes map[string]struct{}
-	CreatedNFGs     []string // Names of created NodeFeatureGroup CRs
-	Namespace       string   // Namespace where NFGs were created
+	CreatedNFGs     []string    // Names of created NodeFeatureGroup CRs
+	Namespace       string      // Namespace where NFGs were created
+	CreatedAt       metav1.Time // Timestamp when NFGs were created
 }
 
 // Clone implements the scheduler framework StateData interface.
