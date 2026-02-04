@@ -9,7 +9,7 @@ compatibilities:
         ata_generic: {op: Exists}
     - feature: cpu.model
       matchExpressions:
-        vendor_id: {op: In, value: ["Intel", "AMD"]}
+        vendor_id: {op: In, value: ["AMD"]}
   - name: "one of available nics"
     matchAny:
     - matchFeatures:

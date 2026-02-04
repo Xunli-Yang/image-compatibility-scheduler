@@ -71,10 +71,12 @@ make deploy
 
 # 或手动部署
 kubectl apply -f deploy/
-```
-# 或者更新
+
+# 更新（如果需要）
 kubectl rollout restart deployment custom-scheduler -n custom-scheduler
+
 ```
+
 
 ### 6. 验证部署
 
@@ -126,9 +128,16 @@ curl http://localhost:10259/metrics | grep scheduler
 
 2.将兼容性工件attach到镜像：
 ```bash
+# attach compatibility artifact to test image
 oras attach --insecure --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
   docker.io/leoyy6/alpine:3.19 \
   scripts/compatibility-artifact.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+
+# 查看镜像中的工件
+oras discover --format json --plain-http docker.io/leoyy6/alpine:3.19
+
+# 查看特定清单
+oras manifest fetch --format json --plain-http docker.io/leoyy6/alpine:3.19@sha256:<digest>
 ```
 
 #### 3.2 创建测试 Pod
