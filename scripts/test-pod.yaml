@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-scheduler-pod
+  namespace: default
+  labels:
+    app: test-scheduler
+spec:
+  schedulerName: custom-scheduler
+  containers:
+  - name: alpine
+    image: docker.io/leoyy6/alpine-simple-test:v7
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "250m"
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+  restartPolicy: Never
