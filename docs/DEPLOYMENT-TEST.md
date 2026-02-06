@@ -130,14 +130,17 @@ curl http://localhost:10259/metrics | grep scheduler
 ```bash
 # attach compatibility artifact to test image
 oras attach --insecure --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
-  docker.io/leoyy6/alpine:3.19 \
+  docker.io/leoyy6/alpine-simple-test:v7 \
   scripts/compatibility-artifact.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
 
 # 查看镜像中的工件
-oras discover --format json --plain-http docker.io/leoyy6/alpine:3.19
+oras discover --format json --plain-http docker.io/leoyy6/alpine-simple-test:v7
 
 # 查看特定清单
-oras manifest fetch --format json --plain-http docker.io/leoyy6/alpine:3.19@sha256:<digest>
+oras manifest fetch --format json --plain-http docker.io/leoyy6/alpine-simple-test:v7@sha256:<digest>
+
+# 删除指定工件(需要先登录，例如oras login docker.io)
+oras manifest delete -f docker.io/leoyy6/alpine-simple-test:v7@sha256:<digest>
 ```
 
 #### 3.2 创建测试 Pod
