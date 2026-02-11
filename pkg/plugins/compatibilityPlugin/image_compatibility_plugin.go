@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"sort"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -12,11 +12,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 	"oras.land/oras-go/v2/registry"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
+	nfdv1alpha1 "sigs.k8s.io/node-feature-discovery/api/nfd/v1alpha1"
+	"sigs.k8s.io/node-feature-discovery/pkg/apis/nfd/nodefeaturerule"
 	artifactcli "sigs.k8s.io/node-feature-discovery/pkg/client-nfd/compat/artifact-client"
+	"sigs.k8s.io/node-feature-discovery/pkg/utils"
 )
 
 // New creates a new ImageCompatibilityPlugin instance.
@@ -42,10 +46,10 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 	// Scheduler usually runs in-cluster as a Pod, so use InClusterConfig.
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
-		log.Printf("failed to create in-cluster config for nfd client: %v", err)
+		klog.Errorf("failed to create in-cluster config for nfd client: %v", err)
 	} else {
 		if cli, err := nfdclientset.NewForConfig(restCfg); err != nil {
-			log.Printf("failed to create nfd clientset: %v", err)
+			klog.Errorf("failed to create nfd clientset: %v", err)
 		} else {
 			nfdCli = cli
 		}
@@ -54,14 +58,21 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 	// Dynamically discover nfd-master namespace
 	nfdMasterNamespace, err := discoverNfdMasterNamespace(ctx, handle.ClientSet())
 	if err != nil {
-		log.Printf("failed to discover nfd-master namespace: %v, will retry on first use", err)
+		klog.Errorf("failed to discover nfd-master namespace: %v, will retry on first use", err)
 		// Continue with empty namespace, will be discovered lazily
+	}
+
+	// Determine custom scheduler namespace
+	customSchedulerNamespace := args.Namespace
+	if customSchedulerNamespace == "" {
+		customSchedulerNamespace = "custom-scheduler"
 	}
 
 	return &ImageCompatibilityPlugin{
 		handle:             handle,
 		nfdClient:          nfdCli,
 		nfdMasterNamespace: nfdMasterNamespace,
+		namespace:          customSchedulerNamespace,
 		args:               args,
 		imageToNFGCache:    make(map[string][]string),
 	}, nil
@@ -94,7 +105,7 @@ func discoverNfdMasterNamespace(ctx context.Context, clientSet k8sclient.Interfa
 	}
 	// If not found, return empty namespace with log
 	if len(pods.Items) == 0 {
-		log.Printf("nfd-master pod not found with label selector %s", NfdMasterLabelSelector)
+		klog.Warningf("nfd-master pod not found with label selector %s", NfdMasterLabelSelector)
 		return "", nil
 	}
 
@@ -109,20 +120,28 @@ func (f *ImageCompatibilityPlugin) Name() string {
 // PreFilter is invoked at the PreFilter extension point.
 func (f *ImageCompatibilityPlugin) PreFilter(ctx context.Context, cycleState fwk.CycleState, pod *v1.Pod, filteredNodes []fwk.NodeInfo) (*framework.PreFilterResult, *fwk.Status) {
 	// Ensure nfd-master namespace is discovered
-	namespace, err := f.getNfdMasterNamespace(ctx)
+	nfdMasterNamespace, err := f.getNfdMasterNamespace(ctx)
 	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to get nfd-master namespace: %v", err))
 	}
 
-	// Create NodeFeatureGroup CRs for all container images
+	// Create NodeFeatureGroup CRs for all container images in custom-scheduler namespace
 	// Store created NFG names in cycle state for later reference
-	createdNFGs, err := f.createNodeFeatureGroupsForPod(ctx, pod, namespace)
+	createdNFGs, err := f.createNodeFeatureGroupsForPod(ctx, pod, f.namespace)
 	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to create NodeFeatureGroups: %v", err))
 	}
 
-	// Collect compatible nodes (with retry logic built in)
-	compatibleNodes, err := f.collectCompatibleNodesFromNFGs(ctx, namespace, createdNFGs)
+	// Update compatibility NFGs with nodes from pre-created group NFGs
+	// This is needed because nfd won't auto-update NFGs in custom-scheduler namespace
+	err = f.updateCompatibilityNFGsWithPreGroups(ctx, nfdMasterNamespace, f.namespace, createdNFGs)
+	if err != nil {
+		klog.Errorf("Failed to update compatibility NFGs with pre-created groups: %v", err)
+		// Continue even if update fails
+	}
+
+	// Collect compatible nodes from updated compatibility NFGs
+	compatibleNodes, err := f.collectCompatibleNodesFromNFGs(ctx, f.namespace, createdNFGs)
 	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to collect compatible nodes from NFGs: %v", err))
 	}
@@ -131,7 +150,7 @@ func (f *ImageCompatibilityPlugin) PreFilter(ctx context.Context, cycleState fwk
 	state := &CompatibilityState{
 		CompatibleNodes: compatibleNodes,
 		CreatedNFGs:     createdNFGs,
-		Namespace:       namespace,
+		Namespace:       f.namespace,
 	}
 	cycleState.Write(PluginName, state)
 
@@ -149,20 +168,20 @@ func (f *ImageCompatibilityPlugin) PreFilterExtensions() framework.PreFilterExte
 func (f *ImageCompatibilityPlugin) Filter(ctx context.Context, cycleState fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) *fwk.Status {
 	node := nodeInfo.Node()
 	if node == nil {
-		log.Printf("NodeInfo for pod %s is nil", pod.Name)
+		klog.Errorf("NodeInfo for pod %s is nil", pod.Name)
 		return fwk.NewStatus(fwk.Error, "node not found")
 	}
 
 	// Get compatibility state from cycle state
 	state, err := getCompatibilityState(cycleState)
 	if err != nil {
-		log.Printf("failed to get compatibility state for pod %s: %v", pod.Name, err)
+		klog.Errorf("failed to get compatibility state for pod %s: %v", pod.Name, err)
 		return fwk.NewStatus(fwk.Error, fmt.Sprintf("get compatibility state error: %v", err))
 	}
 
 	// If no compatible nodes found, reject the node
 	if len(state.CompatibleNodes) == 0 {
-		log.Printf("No compatible nodes found for pod %s", pod.Name)
+		klog.Warningf("No compatible nodes found for pod %s", pod.Name)
 		return fwk.NewStatus(
 			fwk.Unschedulable,
 			fmt.Sprintf("node %s is not compatible with pod images", node.Name),
@@ -235,7 +254,7 @@ func (f *ImageCompatibilityPlugin) updateCacheForImage(imageName string, nfgName
 	f.imageToNFGCacheMutex.Lock()
 	f.imageToNFGCache[imageName] = nfgNames
 	f.imageToNFGCacheMutex.Unlock()
-	log.Printf("Cached NFGs %v for image %s", nfgNames, imageName)
+	klog.Infof("Cached NFGs %v for image %s", nfgNames, imageName)
 }
 
 // removeFromCache removes an image from the cache
@@ -243,7 +262,7 @@ func (f *ImageCompatibilityPlugin) removeFromCache(imageName string) {
 	f.imageToNFGCacheMutex.Lock()
 	delete(f.imageToNFGCache, imageName)
 	f.imageToNFGCacheMutex.Unlock()
-	log.Printf("Removed image %s from cache", imageName)
+	klog.Infof("Removed image %s from cache", imageName)
 }
 
 // getValidCachedNFGs returns valid NFGs from cache for a specific image
@@ -273,7 +292,7 @@ func (f *ImageCompatibilityPlugin) getValidCachedNFGs(ctx context.Context, image
 	// Update cache with only valid NFGs if some were invalid
 	if len(validNFGs) != len(cachedNFGs) {
 		f.updateCacheForImage(imageName, validNFGs)
-		log.Printf("Updated cache for image %s: removed %d invalid NFGs", imageName, len(cachedNFGs)-len(validNFGs))
+		klog.Infof("Updated cache for image %s: removed %d invalid NFGs", imageName, len(cachedNFGs)-len(validNFGs))
 	}
 
 	return validNFGs, true
@@ -284,7 +303,7 @@ func (f *ImageCompatibilityPlugin) getValidCachedNFGs(ctx context.Context, image
 func (f *ImageCompatibilityPlugin) createNodeFeatureGroupsForImage(ctx context.Context, pod *v1.Pod, imageName, namespace string) ([]string, error) {
 	// Check cache first
 	if validNFGs, found := f.getValidCachedNFGs(ctx, imageName, namespace); found {
-		log.Printf("Reusing cached NFGs %v for image %s", validNFGs, imageName)
+		klog.Infof("Reusing cached NFGs %v for image %s", validNFGs, imageName)
 		return validNFGs, nil
 	}
 
@@ -327,18 +346,18 @@ func (f *ImageCompatibilityPlugin) collectCompatibleNodesFromNFGs(ctx context.Co
 		intersection := f.computeIntersection(ctx, namespace, nfgNames)
 
 		if len(intersection) > 0 {
-			log.Printf("Found %d compatible nodes after %v", len(intersection), time.Since(startTime))
+			klog.Infof("Found %d compatible nodes after %v", len(intersection), time.Since(startTime))
 			return intersection, nil
 		}
 
 		// Wait and retry
 		if time.Since(startTime) < maxWait {
-			log.Printf("No compatible nodes, waiting (attempt %d, elapsed: %v)", attempt+1, time.Since(startTime))
+			klog.Infof("No compatible nodes, waiting (attempt %d, elapsed: %v)", attempt+1, time.Since(startTime))
 			time.Sleep(retryInterval)
 		}
 	}
 
-	log.Printf("No compatible nodes found after waiting %v", maxWait)
+	klog.Warningf("No compatible nodes found after waiting %v", maxWait)
 	return make(map[string]struct{}), nil
 }
 
@@ -385,4 +404,165 @@ func (f *ImageCompatibilityPlugin) getNFGNodes(ctx context.Context, namespace, n
 		nodes[n.Name] = struct{}{}
 	}
 	return nodes, nil
+}
+
+// updateCompatibilityNFGsWithPreGroups updates compatibility NFGs with nodes from pre-created group NFGs
+// This method needs to call nfd-master's matching logic since compatibility NFGs won't auto-update status
+func (f *ImageCompatibilityPlugin) updateCompatibilityNFGsWithPreGroups(ctx context.Context, preNamespace, compatibilityNamespace string, compatibilityNFGNames []string) error {
+	// TODO: Implement nfd-master matching logic
+	// For now, just log that we would update the NFGs
+	klog.Infof("Would update compatibility NFGs %v in namespace %s with pre-created groups from namespace %s",
+		compatibilityNFGNames, compatibilityNamespace, preNamespace)
+
+	// Get all pre-created group NFGs
+	preNFGs, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(preNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list pre-created group NFGs: %w", err)
+	}
+
+	if len(preNFGs.Items) == 0 {
+		klog.Infof("No pre-created group NFGs found in namespace %s", preNamespace)
+		return nil
+	}
+
+	klog.Infof("Found %d pre-created group NFGs in namespace %s", len(preNFGs.Items), preNamespace)
+
+	// For now, we just log the matching logic would be implemented
+	// Actual implementation would need to:
+	// 1. Call nfd-master API to match nodes between pre-created NFGs and compatibility NFGs
+	// 2. Update compatibility NFG status with matched nodes from pre-created groups
+	for _, preNFG := range preNFGs.Items {
+		nfg, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(preNamespace).Get(ctx, preNFG.Name, metav1.GetOptions{})
+		if err != nil {
+			klog.Errorf("Failed to get pre-created NFG %s: %v", preNFG.Name, err)
+			continue
+		}
+		if nfg.Status.Nodes == nil || len(nfg.Status.Nodes) == 0 {
+			klog.Warningf("Pre-created NFG %s has no nodes in status", preNFG.Name)
+			continue
+		}
+
+		// Check if any node in the preNFG matches the rules
+		matchedNodes := make([]nfdv1alpha1.FeatureGroupNode, 0)
+		for _, preNode := range nfg.Status.Nodes {
+			nodeFeature, err := f.getAndMergeNodeFeatures(ctx, preNode.Name)
+			if err != nil {
+				klog.Errorf("Failed to get NodeFeatures for node %s: %v", preNode.Name, err)
+				continue
+			}
+			features := &nodeFeature.Spec.Features
+
+			// Execute rules for this node
+			ruleMatched := false
+			for _, rule := range nfg.Spec.Rules {
+				ruleOut, err := nodefeaturerule.ExecuteGroupRule(&rule, features, true)
+				if err != nil {
+					klog.Errorf("Failed to execute rule %s: %v", rule.Name, err)
+					continue
+				}
+				if ruleOut.MatchStatus.IsMatch {
+					ruleMatched = true
+					break
+				}
+				// Feed back vars from rule output to features map for subsequent rules to match
+				features.InsertAttributeFeatures(nfdv1alpha1.RuleBackrefDomain, nfdv1alpha1.RuleBackrefFeature, ruleOut.Vars)
+			}
+
+			// If any rule matched, add this node to matched nodes
+			if ruleMatched {
+				matchedNodes = append(matchedNodes, nfdv1alpha1.FeatureGroupNode{
+					Name: preNode.Name,
+				})
+			}
+		}
+
+		// If we have matched nodes, update compatibility NFGs
+		if len(matchedNodes) > 0 {
+			klog.Infof("Pre-created NFG %s has %d nodes matching rules, would update compatibility NFGs",
+				preNFG.Name, len(matchedNodes))
+			// TODO: Actually update compatibility NFG status with matchedNodes
+		} else {
+			klog.Infof("Pre-created NFG %s has no nodes matching rules", preNFG.Name)
+		}
+	}
+
+	return nil
+}
+
+// getAndMergeNodeFeatures merges the NodeFeature objects of the given node into a single NodeFeatureSpec.
+// The Name field of the returned NodeFeatureSpec contains the node name.
+// This is a simplified version that uses the Kubernetes API directly instead of the internal nfdmaster featureLister.
+func (f *ImageCompatibilityPlugin) getAndMergeNodeFeatures(ctx context.Context, nodeName string) (*nfdv1alpha1.NodeFeature, error) {
+	nodeFeatures := &nfdv1alpha1.NodeFeature{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+		},
+	}
+
+	// If nfdClient is not available, return empty NodeFeature
+	if f.nfdClient == nil {
+		return &nfdv1alpha1.NodeFeature{}, nil
+	}
+
+	// List all NodeFeature objects across all namespaces with the node name label
+	labelSelector := fmt.Sprintf("%s=%s", nfdv1alpha1.NodeFeatureObjNodeNameLabel, nodeName)
+	allNodeFeatures, err := f.nfdClient.NfdV1alpha1().NodeFeatures("").List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return &nfdv1alpha1.NodeFeature{}, fmt.Errorf("failed to get NodeFeature resources for node %q: %w", nodeName, err)
+	}
+
+	filteredObjs := []*nfdv1alpha1.NodeFeature{}
+	for i := range allNodeFeatures.Items {
+		// For simplicity, we accept all namespaces
+		// In the original NFD implementation, there's namespace filtering logic
+		filteredObjs = append(filteredObjs, &allNodeFeatures.Items[i])
+	}
+
+	// Node without a running NFD-Worker
+	if len(filteredObjs) == 0 {
+		return &nfdv1alpha1.NodeFeature{}, nil
+	}
+
+	// Sort our objects
+	sort.Slice(filteredObjs, func(i, j int) bool {
+		// Objects in our nfd namespace gets into the beginning of the list
+		if filteredObjs[i].Namespace == f.namespace && filteredObjs[j].Namespace != f.namespace {
+			return true
+		}
+		if filteredObjs[i].Namespace != f.namespace && filteredObjs[j].Namespace == f.namespace {
+			return false
+		}
+		// After the nfd namespace, sort objects by their name
+		if filteredObjs[i].Name != filteredObjs[j].Name {
+			return filteredObjs[i].Name < filteredObjs[j].Name
+		}
+		// Objects with the same name are sorted by their namespace
+		return filteredObjs[i].Namespace < filteredObjs[j].Namespace
+	})
+
+	if len(filteredObjs) > 0 {
+		// Merge in features
+		//
+		// NOTE: changing the rule api to support handle multiple objects instead
+		// of merging would probably perform better with lot less data to copy.
+		features := filteredObjs[0].Spec.DeepCopy()
+
+		// Simplified: Skip the complex NFD configuration checks
+		// In the original code, there are checks for DenyNodeFeatureLabels and NFDFeatureGate
+		// For our use case, we assume these features are enabled/disabled as needed
+
+		for _, o := range filteredObjs[1:] {
+			s := o.Spec.DeepCopy()
+			s.MergeInto(features)
+		}
+
+		// Set the merged features to the NodeFeature object
+		nodeFeatures.Spec = *features
+
+		klog.V(4).InfoS("merged nodeFeatureSpecs", "newNodeFeatureSpec", utils.DelayedDumper(features))
+	}
+
+	return nodeFeatures, nil
 }

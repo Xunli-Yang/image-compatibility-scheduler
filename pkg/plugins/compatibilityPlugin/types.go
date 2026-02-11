@@ -24,6 +24,7 @@ type ImageCompatibilityPlugin struct {
 	handle               framework.Handle
 	nfdClient            nfdclientset.Interface
 	nfdMasterNamespace   string
+	namespace            string
 	args                 ImageCompatibilityPluginArgs
 	imageToNFGCache      map[string][]string // Cache: image -> list of NFG names
 	imageToNFGCacheMutex sync.RWMutex        // Mutex to protect cache access
@@ -32,6 +33,8 @@ type ImageCompatibilityPlugin struct {
 // ImageCompatibilityPluginArgs holds the arguments for the ImageCompatibilityPlugin.
 type ImageCompatibilityPluginArgs struct {
 	PlainHttp bool `json:"plainHttp,omitempty"`
+	// Namespace is the namespace where compatibility NFGs will be created
+	Namespace string `json:"namespace,omitempty"`
 }
 
 type Compatibility struct {
