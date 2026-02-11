@@ -15,14 +15,6 @@ make docker-push
 make deploy
 ```
 
-### 2. 快速验证
-
-运行验证脚本：
-
-```bash
-./scripts/verify-deployment.sh
-```
-
 ### 3. 手动测试
 
 创建测试 Pod：
@@ -45,11 +37,6 @@ NFD_NS=$(kubectl get pods -A -l app=nfd-master -o jsonpath='{.items[0].metadata.
 kubectl get nodefeaturegroups -n $NFD_NS
 ```
 
-### 4. 清理测试资源
-
-```bash
-./scripts/cleanup-test-resources.sh
-```
 
 ## 常见问题
 

@@ -70,7 +70,7 @@ kubectl delete deployment custom-scheduler -n custom-scheduler
 make deploy
 
 # 或手动部署
-kubectl apply -f deploy/
+kubectl apply -k deploy/
 
 # 更新（如果需要）
 kubectl rollout restart deployment custom-scheduler -n custom-scheduler

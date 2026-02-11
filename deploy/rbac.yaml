@@ -11,6 +11,7 @@ rules:
   - pods
   - nodes
   - namespaces
+  - endpoints
   verbs:
   - get
   - list
@@ -21,12 +22,96 @@ rules:
   - pods/status
   verbs:
   - update
+  - patch
 - apiGroups:
   - ""
+  resources:
+  - pods/binding
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  - events.k8s.io
   resources:
   - events
   verbs:
   - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - replicationcontrollers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  - volumeattachments
+  - csidrivers
+  - csinodes
+  - csistoragecapacities
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  - statefulsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceslices
+  - deviceclasses
+  - resourceclaims
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
   - patch
 - apiGroups:
   - nfd.k8s-sigs.io
@@ -40,26 +125,3 @@ rules:
   - update
   - patch
   - delete
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - get
-  - list
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: custom-scheduler
-  labels:
-    app: custom-scheduler
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: custom-scheduler
-subjects:
-- kind: ServiceAccount
-  name: custom-scheduler
-  namespace: custom-scheduler
