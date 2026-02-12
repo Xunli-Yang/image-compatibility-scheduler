@@ -48,7 +48,7 @@ make docker-push
 
 # 3. Deploy to Kubernetes
 make deploy
-
+```
 For detailed deployment steps, refer to [DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 For quick start guide, refer to [QUICKSTART.md](QUICKSTART.md)
@@ -64,14 +64,6 @@ kubectl apply -k deploy/
 ```bash
 make undeploy
 ```
-
-## Configuration
-
-The scheduler configuration is stored in `deploy/configmap.yaml`. You can customize:
-
-- Scheduler name
-- Plugin configuration
-- Leader election settings
 
 ## Plugin Details
 
@@ -121,6 +113,44 @@ This dynamic approach ensures compatibility with different NFD installation conf
    NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
    kubectl get nodefeaturegroups -n $NFD_NS
    ```
-
 For quick verification steps, refer to [QUICKSTART.md](QUICKSTART.md)
+## Test Process
+
+For a comprehensive end‑to‑end verification, follow the steps below. A detailed guide is available in [VERFICATION.md](docs/VERFICATION.md).
+
+### Step 1 – Deploy the Scheduler
+```bash
+make deploy
+kubectl get pods -n custom-scheduler
+```
+
+### Step 2 – Define Compatibility Requirements
+Create a compatibility specification (example in `scripts/compatibility-artifact-kernel-pci.yaml`). The specification describes node features required by your container image.
+
+### Step 3 – Attach the Specification to an Image
+If testing with a real container image, attach the artifact using ORAS:
+```bash
+oras attach --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
+  <image-url> <path-to-spec>.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+```
+### Step 4 – Deploy a Test Pod
+Create a Pod that uses the custom scheduler (`schedulerName: custom-scheduler`) and references the image with compatibility requirements.
+
+### Step 5 – Verify Scheduling Outcome
+1. **Check Pod scheduling**:
+   ```bash
+   kubectl get pod <test-pod> -o wide
+   ```
+   The pod should be scheduled onto a node that satisfies the compatibility rules.
+
+   ![Pod scheduled to compatible node](docs/images/image1.png)
+
+2. **Inspect created NodeFeatureGroup resources**:
+   ```bash
+   kubectl get nodefeaturegroups.nfd.k8s-sigs.io -A
+   kubectl describe nodefeaturegroup <nfg-name>
+   ```
+   You should see a temporary NodeFeatureGroup with rules matching your compatibility specification.
+
+   ![NodeFeatureGroup details](docs/images/image2.png)
 
