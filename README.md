@@ -49,18 +49,14 @@ make docker-push
 # 3. Deploy to Kubernetes
 make deploy
 
-# 4. Verify deployment
-./scripts/verify-deployment.sh
-```
+For detailed deployment steps, refer to [DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
-详细部署步骤请参考 [DEPLOYMENT.md](docs/DEPLOYMENT.md)
-
-快速开始指南请参考 [QUICKSTART.md](QUICKSTART.md)
+For quick start guide, refer to [QUICKSTART.md](QUICKSTART.md)
 
 ### Manual Deployment
 
 ```bash
-kubectl apply -f deploy/
+kubectl apply -k deploy/
 ```
 
 ### Undeploy
@@ -90,63 +86,41 @@ The plugin implements the Filter extension point and:
 
 ### Namespace Discovery
 
-The plugin automatically discovers the nfd-master namespace by:
+The plugin automatically discovers the nfd-master namespace at runtime:
 
-1. Searching common namespaces (node-feature-discovery, kube-system, default)
-2. If not found, searching all namespaces for pods with label `app=nfd-master`
+1. **Priority Search**: First searches in common namespaces where NFD is typically installed:
+   - `node-feature-discovery`
+   - `kube-system`
+   - `default`
 
-## Development
+2. **Fallback Search**: If not found in common namespaces, searches across all namespaces for pods with the NFD master label selector:
+   - Label: `app.kubernetes.io/name=node-feature-discovery,role=master`
 
-### Run Tests
+3. **Lazy Discovery**: If namespace discovery fails during plugin initialization, it will retry on first use when a Pod needs to be scheduled.
 
-```bash
-make test
-```
-
-### Format Code
-
-```bash
-make fmt
-```
-
-### Lint
-
-```bash
-make lint
-```
+This dynamic approach ensures compatibility with different NFD installation configurations without requiring manual configuration.
 
 ## Verification
 
-### Automated Verification
-
-运行验证脚本进行自动化验证：
-
-```bash
-./scripts/verify-deployment.sh
-```
-
 ### Manual Verification
 
-1. **检查调度器状态**:
+1. **Check scheduler status**:
    ```bash
    kubectl get pods -n custom-scheduler
    kubectl logs -n custom-scheduler -l app=custom-scheduler
    ```
 
-2. **测试调度功能**:
+2. **Test scheduling functionality**:
    ```bash
    kubectl apply -f scripts/test-pod.yaml
    kubectl get pod test-scheduler-pod
    ```
 
-3. **检查 NodeFeatureGroup CRs**:
+3. **Check NodeFeatureGroup CRs**:
    ```bash
-   NFD_NS=$(kubectl get pods -A -l app=nfd-master -o jsonpath='{.items[0].metadata.namespace}')
+   NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
    kubectl get nodefeaturegroups -n $NFD_NS
    ```
 
-详细验证步骤请参考 [DEPLOYMENT.md](docs/DEPLOYMENT.md#验证步骤)
+For quick verification steps, refer to [QUICKSTART.md](QUICKSTART.md)
 
-## License
-
-[Your License Here]
