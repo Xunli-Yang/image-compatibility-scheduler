@@ -1,286 +1,240 @@
-# Custom Scheduler 部署指南
+# Custom Scheduler Deployment Guide
 
-本文档详细说明如何部署和验证 Custom Scheduler 插件。
+This document details how to deploy and verify the Custom Scheduler plugin.
 
-## 前置条件
+## Prerequisites
 
-1. **Kubernetes 集群** (v1.20+)
-2. **Node Feature Discovery (NFD)** 已安装
-3. **kubectl** 已配置并可以访问集群
-4. **Docker** 或容器运行时（用于构建镜像）
-5. **Make** (可选，但推荐)
+1. **Kubernetes cluster** (v1.20+)
+2. **Node Feature Discovery (NFD)** installed
+3. **kubectl** configured and able to access the cluster
+4. **Docker** or container runtime (for building images)
+5. **Make** (optional but recommended)
 
-## 部署步骤
+## Deployment Steps
 
-### 1. 验证 NFD 安装
+### 1. Verify NFD Installation
 
-首先确认 NFD 已正确安装：
+First confirm that NFD is properly installed:
 
 ```bash
-# 检查 nfd-master Pod 是否运行
+# Check if nfd-master Pod is running
 kubectl get pods -A | grep nfd-master
 
-# 检查 NodeFeatureGroup CRD 是否存在
+# Check if NodeFeatureGroup CRD exists
 kubectl get crd nodefeaturegroups.nfd.k8s-sigs.io
 ```
 
-### 2. 构建 Docker 镜像
+### 2. Build Docker Image
 
 ```bash
-# 使用默认配置构建
+# Build with default configuration
 make docker-build
 
-# 或指定自定义 registry 和 tag
-REGISTRY=your-registry.io IMAGE_NAME=custom-scheduler IMAGE_TAG=v1.0.0 make docker-build
+# Or specify custom registry and tag
+REGISTRY=docker.io/leoyy6 IMAGE_NAME=custom-scheduler IMAGE_TAG=v1.0.0 make docker-build
 ```
 
-### 3. 推送镜像到 Registry
+### 3. Push Image to Registry
 
 ```bash
-# 使用默认配置推送
+# Push with default configuration
 make docker-push
 
-# 或手动推送
-docker push your-registry.io/custom-scheduler:v1.0.0
+# Or push manually
+docker push docker.io/leoyy6/custom-scheduler:v1.0.0
 ```
 
-**注意**: 如果使用私有 registry，需要先登录：
+**Note**: If using a private registry, login first:
 ```bash
-docker login your-registry.io
+docker login docker.io/leoyy6
 ```
 
-### 4. 更新部署文件中的镜像
+### 4. Update Image in Deployment File
 
-编辑 `deploy/deployment.yaml`，更新镜像地址：
+Edit `deploy/deployment.yaml` to update the image address:
 
 ```yaml
 containers:
 - name: scheduler
-  image: your-registry.io/custom-scheduler:v1.0.0  # 更新这里
+  image: docker.io/leoyy6/custom-scheduler:v1.0.0  # Update here
 ```
 
-### 5. 部署到 Kubernetes
+### 5. Deploy to Kubernetes
 
 ```bash
-# 使用 Makefile 一键部署（会自动构建和推送镜像）
+# Delete existing deployment (if any)
+kubectl delete deployment custom-scheduler -n custom-scheduler
+
+# Use Makefile for one-click deployment (will automatically build and push image)
 make deploy
 
-# 或手动部署
-kubectl apply -f deploy/
+# Or deploy manually
+kubectl apply -k deploy/
+
+# Update (if needed)
+kubectl rollout restart deployment custom-scheduler -n custom-scheduler
 ```
 
-### 6. 验证部署
+### 6. Verify Deployment
 
 ```bash
-# 检查 Pod 状态
+# Check Pod status
 kubectl get pods -n custom-scheduler
 
-# 查看 Pod 日志
+# View Pod logs
 kubectl logs -n custom-scheduler -l app=custom-scheduler
 
-# 检查 ServiceAccount 和 RBAC
+# Check ServiceAccount and RBAC
 kubectl get sa -n custom-scheduler
 kubectl get clusterrole custom-scheduler
 kubectl get clusterrolebinding custom-scheduler
 ```
 
-## 验证步骤
+## Verification Steps
 
-### 1. 检查调度器运行状态
+### 1. Check Scheduler Running Status
 
 ```bash
-# 查看调度器 Pod 是否 Running
+# Check if scheduler Pod is Running
 kubectl get pods -n custom-scheduler
 
-# 查看详细日志
+# View detailed logs
 kubectl logs -n custom-scheduler -l app=custom-scheduler -f
 ```
 
-预期输出应该包含：
-- 调度器成功启动
-- 插件成功注册
-- 没有错误信息
+Expected output should include:
+- Scheduler successfully started
+- Plugins successfully registered
+- No error messages
 
-### 2. 验证插件注册
+### 2. Verify Plugin Registration
 
 ```bash
-# 检查调度器配置
+# Check scheduler configuration
 kubectl get configmap scheduler-config -n custom-scheduler -o yaml
 
-# 查看调度器进程信息（如果启用了 metrics）
+# View scheduler process information (if metrics are enabled)
 kubectl port-forward -n custom-scheduler deployment/custom-scheduler 10259:10259
 curl http://localhost:10259/metrics | grep scheduler
 ```
 
-### 3. 测试调度功能
+### 3. Test Scheduling Functionality
+#### 3.1 Prepare Test Image:
 
-#### 3.1 创建测试 Pod
+1. Prepare remote test image
 
-创建一个使用自定义调度器的测试 Pod：
+2. Attach compatibility artifact to image:
+```bash
+# attach compatibility artifact to test image
+oras attach --insecure --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
+  docker.io/leoyy6/alpine-simple-test:v7 \
+  scripts/compatibility-artifact.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+
+# View artifacts in image
+oras discover --format json --plain-http docker.io/leoyy6/alpine-simple-test:v7
+
+# View specific manifest
+oras manifest fetch --format json --plain-http docker.io/leoyy6/alpine-simple-test:v7@sha256:<digest>
+
+# Delete specific artifact (need to login first, e.g., oras login docker.io)
+oras manifest delete -f docker.io/leoyy6/alpine-simple-test:v7@sha256:<digest>
+```
+
+#### 3.2 Create Test Pod
+
+Create a test Pod using the custom scheduler:
 
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-pod
+  name: test-scheduler-pod
   namespace: default
+  labels:
+    app: test-scheduler
 spec:
   schedulerName: custom-scheduler
   containers:
-  - name: test-container
-    image: nginx:latest
+  - name: alpine
+    image: docker.io/leoyy6/alpine-simple-test:v7
     resources:
       requests:
         memory: "64Mi"
         cpu: "250m"
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+  restartPolicy: Never
 EOF
 ```
 
-#### 3.2 检查 Pod 调度状态
+Use script to create pod:
+```bash
+kubectl apply -f scripts/test-pod.yaml
+```
+
+#### 3.3 Check Pod Scheduling Status
 
 ```bash
-# 查看 Pod 状态
-kubectl get pod test-pod -o wide
+# View Pod status
+kubectl get pod test-scheduler-pod -o wide
 
-# 查看 Pod 事件
-kubectl describe pod test-pod
+# View Pod events
+kubectl describe pod test-scheduler-pod
 
-# 查看调度器日志
+# View scheduler logs
 kubectl logs -n custom-scheduler -l app=custom-scheduler --tail=50
 ```
 
-#### 3.3 验证 NodeFeatureGroup 创建
+#### 3.4 Verify NodeFeatureGroup Creation
 
 ```bash
-# 获取 nfd-master namespace
-NFD_NS=$(kubectl get pods -A -l app=nfd-master -o jsonpath='{.items[0].metadata.namespace}')
+# Get nfd-master namespace
+NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
 
-# 查看创建的 NodeFeatureGroup CRs
+# View created NodeFeatureGroup CRs
 kubectl get nodefeaturegroups -n $NFD_NS
 
-# 查看 NodeFeatureGroup 详情
+# View NodeFeatureGroup details
 kubectl get nodefeaturegroups -n $NFD_NS -o yaml
 ```
 
-### 4. 验证节点过滤功能
+### 4. Verify Node Filtering Functionality
 
-#### 4.1 检查兼容节点集合
+#### 4.1 Check Compatible Node Set
 
 ```bash
-# 查看调度器日志中的兼容节点信息
+# View compatible node information in scheduler logs
 kubectl logs -n custom-scheduler -l app=custom-scheduler | grep "compatible nodes"
 
-# 查看 NodeFeatureGroup status 中的节点列表
-kubectl get nodefeaturegroups -n $NFD_NS -o jsonpath='{.items[*].status.nodes[*].name}'
+# View node list in NodeFeatureGroup status
+kubectl describe nodefeaturegroup <nfg_name> -n $NFD_NS
 ```
 
-#### 4.2 测试不兼容场景
-
-创建一个使用不兼容镜像的 Pod（如果存在）：
+### 5. Verify TTL Cleanup Mechanism
 
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: test-pod-incompatible
-  namespace: default
-spec:
-  schedulerName: custom-scheduler
-  containers:
-  - name: test-container
-    image: some-incompatible-image:latest
-    resources:
-      requests:
-        memory: "64Mi"
-        cpu: "250m"
-EOF
-```
+# Delete test Pod
+kubectl delete pod test-scheduler-pod
 
-检查 Pod 是否被正确拒绝：
-
-```bash
-kubectl get pod test-pod-incompatible
-kubectl describe pod test-pod-incompatible | grep -i "unschedulable\|compatible"
-```
-
-### 5. 验证 TTL 清理机制
-
-```bash
-# 删除测试 Pod
-kubectl delete pod test-pod
-
-# 等待几秒后检查 NodeFeatureGroup 是否被自动删除
+# Wait a few seconds and check if NodeFeatureGroup is automatically deleted
 sleep 10
 kubectl get nodefeaturegroups -n $NFD_NS
 ```
 
-### 6. 性能验证
+## Uninstallation
 
 ```bash
-# 监控调度器资源使用
-kubectl top pod -n custom-scheduler
-
-# 查看调度器 metrics（如果启用）
-kubectl port-forward -n custom-scheduler deployment/custom-scheduler 10259:10259
-curl http://localhost:10259/metrics
-```
-
-## 故障排查
-
-### 问题 1: Pod 无法启动
-
-```bash
-# 检查 Pod 状态
-kubectl describe pod -n custom-scheduler -l app=custom-scheduler
-
-# 检查事件
-kubectl get events -n custom-scheduler --sort-by='.lastTimestamp'
-```
-
-### 问题 2: 调度器无法发现 nfd-master
-
-```bash
-# 检查 nfd-master 是否存在
-kubectl get pods -A -l app=nfd-master
-
-# 检查调度器日志中的 namespace 发现信息
-kubectl logs -n custom-scheduler -l app=custom-scheduler | grep -i "namespace\|nfd-master"
-```
-
-### 问题 3: 权限问题
-
-```bash
-# 验证 RBAC 配置
-kubectl auth can-i create nodefeaturegroups --as=system:serviceaccount:custom-scheduler:custom-scheduler -n node-feature-discovery
-
-# 检查 ClusterRole
-kubectl describe clusterrole custom-scheduler
-```
-
-### 问题 4: 镜像拉取失败
-
-```bash
-# 检查镜像是否存在
-docker pull your-registry.io/custom-scheduler:v1.0.0
-
-# 检查 ImagePullSecrets（如果使用私有 registry）
-kubectl get secret -n custom-scheduler
-```
-
-## 卸载
-
-```bash
-# 使用 Makefile
+# Use Makefile
 make undeploy
 
-# 或手动删除
+# Or delete manually
 kubectl delete -f deploy/
 ```
 
-## 下一步
+## Next Steps
 
-- 查看 [README.md](../README.md) 了解插件工作原理
-- 查看调度器日志进行调试
-- 根据实际需求调整调度器配置
+- View [README.md](../README.md) to understand how the plugin works
+- Check scheduler logs for debugging
+- Adjust scheduler configuration according to actual needs

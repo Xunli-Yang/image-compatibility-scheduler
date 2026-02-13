@@ -1,102 +1,93 @@
-# 快速开始指南
+# Quick Start Guide
 
-## 一键部署和验证
+## One-Click Deployment and Verification
 
-### 1. 构建和部署
+### 1. Build and Deploy
 
 ```bash
-# 构建 Docker 镜像
+# Build Docker image
 make docker-build
 
-# 推送镜像（如果使用远程 registry）
+# Push image (if using remote registry)
 make docker-push
 
-# 部署到 Kubernetes
+# Deploy to Kubernetes
 make deploy
 ```
 
-### 2. 快速验证
-
-运行验证脚本：
+### 2. Verify Deployment
 
 ```bash
-./scripts/verify-deployment.sh
+# Check scheduler Pod status
+kubectl get pods -n custom-scheduler
+
+# View scheduler logs
+kubectl logs -n custom-scheduler -l app=custom-scheduler --tail=50
 ```
 
-### 3. 手动测试
+### 3. Manual Testing
 
-创建测试 Pod：
+Create a test Pod:
 
 ```bash
 kubectl apply -f scripts/test-pod.yaml
 ```
 
-检查调度状态：
+Check scheduling status:
 
 ```bash
-# 查看 Pod 状态
+# View Pod status
 kubectl get pod test-scheduler-pod
 
-# 查看调度器日志
+# View scheduler logs
 kubectl logs -n custom-scheduler -l app=custom-scheduler --tail=50
 
-# 查看 NodeFeatureGroup CRs
-NFD_NS=$(kubectl get pods -A -l app=nfd-master -o jsonpath='{.items[0].metadata.namespace}')
+# View NodeFeatureGroup CRs
+NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
 kubectl get nodefeaturegroups -n $NFD_NS
 ```
 
-### 4. 清理测试资源
+## Common Issues
 
-```bash
-./scripts/cleanup-test-resources.sh
-```
-
-## 常见问题
-
-### Q: 如何查看调度器日志？
+### Q: How to check if the plugin is working?
 
 ```bash
 kubectl logs -n custom-scheduler -l app=custom-scheduler -f
 ```
 
-### Q: 如何检查插件是否工作？
+Check scheduler logs for:
+- "filter pod" messages
+- "compatible nodes" related information
+- No error messages
 
-查看调度器日志中是否有：
-- "filter pod" 消息
-- "compatible nodes" 相关信息
-- 没有错误信息
-
-### Q: Pod 一直处于 Pending 状态？
-
-1. 检查调度器是否运行：
-   ```bash
-   kubectl get pods -n custom-scheduler
-   ```
-
-2. 查看 Pod 事件：
-   ```bash
-   kubectl describe pod <pod-name>
-   ```
-
-3. 检查调度器日志：
-   ```bash
-   kubectl logs -n custom-scheduler -l app=custom-scheduler
-   ```
-
-### Q: 如何更新调度器？
+### Q: Pod stays in Pending state?
 
 ```bash
-# 重新构建镜像
+# View Pod status
+kubectl get pod test-scheduler-pod
+
+# View scheduler logs
+kubectl logs -n custom-scheduler -l app=custom-scheduler --tail=50
+
+# View NodeFeatureGroup CRs
+NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
+kubectl get nodefeaturegroups -n $NFD_NS
+```
+
+### Q: How to update the scheduler?
+
+```bash
+# Rebuild image
 make docker-build
 
-# 推送新镜像
+# Push new image
 make docker-push
 
-# 重启 Deployment
+# Restart Deployment
 kubectl rollout restart deployment/custom-scheduler -n custom-scheduler
 ```
 
-## 下一步
+## Next Steps
 
-- 查看 [DEPLOYMENT.md](docs/DEPLOYMENT.md) 了解详细部署步骤
-- 查看 [README.md](README.md) 了解插件工作原理
+- View [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed deployment steps
+- View [README.md](README.md) to understand how the plugin works

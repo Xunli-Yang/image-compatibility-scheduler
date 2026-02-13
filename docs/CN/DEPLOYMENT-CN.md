@@ -70,7 +70,7 @@ kubectl delete deployment custom-scheduler -n custom-scheduler
 make deploy
 
 # 或手动部署
-kubectl apply -f deploy/
+kubectl apply -k deploy/
 
 # 更新（如果需要）
 kubectl rollout restart deployment custom-scheduler -n custom-scheduler
@@ -152,17 +152,23 @@ kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-pod
+  name: test-scheduler-pod
   namespace: default
+  labels:
+    app: test-scheduler
 spec:
   schedulerName: custom-scheduler
   containers:
-  - name: test-container
-    image: nginx:latest
+  - name: alpine
+    image: docker.io/leoyy6/alpine-simple-test:v7
     resources:
       requests:
         memory: "64Mi"
         cpu: "250m"
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+  restartPolicy: Never
 EOF
 ```
 
@@ -176,10 +182,10 @@ kubectl apply -f scripts/test-pod.yaml
 
 ```bash
 # 查看 Pod 状态
-kubectl get pod test-pod -o wide
+kubectl get pod test-scheduler-pod -o wide
 
 # 查看 Pod 事件
-kubectl describe pod test-pod
+kubectl describe pod test-scheduler-pod
 
 # 查看调度器日志
 kubectl logs -n custom-scheduler -l app=custom-scheduler --tail=50
@@ -189,7 +195,7 @@ kubectl logs -n custom-scheduler -l app=custom-scheduler --tail=50
 
 ```bash
 # 获取 nfd-master namespace
-NFD_NS=$(kubectl get pods -A -l app=nfd-master -o jsonpath='{.items[0].metadata.namespace}')
+NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
 
 # 查看创建的 NodeFeatureGroup CRs
 kubectl get nodefeaturegroups -n $NFD_NS
@@ -207,101 +213,18 @@ kubectl get nodefeaturegroups -n $NFD_NS -o yaml
 kubectl logs -n custom-scheduler -l app=custom-scheduler | grep "compatible nodes"
 
 # 查看 NodeFeatureGroup status 中的节点列表
-kubectl get nodefeaturegroups -n $NFD_NS -o jsonpath='{.items[*].status.nodes[*].name}'
-```
-
-#### 4.2 测试不兼容场景
-
-创建一个使用不兼容镜像的 Pod（如果存在）：
-
-```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: test-pod-incompatible
-  namespace: default
-spec:
-  schedulerName: custom-scheduler
-  containers:
-  - name: test-container
-    image: some-incompatible-image:latest
-    resources:
-      requests:
-        memory: "64Mi"
-        cpu: "250m"
-EOF
-```
-
-检查 Pod 是否被正确拒绝：
-
-```bash
-kubectl get pod test-pod-incompatible
-kubectl describe pod test-pod-incompatible | grep -i "unschedulable\|compatible"
+kubectl describe nodefeaturegroup <nfg_name> -n $NFD_NS
 ```
 
 ### 5. 验证 TTL 清理机制
 
 ```bash
 # 删除测试 Pod
-kubectl delete pod test-pod
+kubectl delete pod test-scheduler-pod
 
 # 等待几秒后检查 NodeFeatureGroup 是否被自动删除
 sleep 10
 kubectl get nodefeaturegroups -n $NFD_NS
-```
-
-### 6. 性能验证
-
-```bash
-# 监控调度器资源使用
-kubectl top pod -n custom-scheduler
-
-# 查看调度器 metrics（如果启用）
-kubectl port-forward -n custom-scheduler deployment/custom-scheduler 10259:10259
-curl http://localhost:10259/metrics
-```
-
-## 故障排查
-
-### 问题 1: Pod 无法启动
-
-```bash
-# 检查 Pod 状态
-kubectl describe pod -n custom-scheduler -l app=custom-scheduler
-
-# 检查事件
-kubectl get events -n custom-scheduler --sort-by='.lastTimestamp'
-```
-
-### 问题 2: 调度器无法发现 nfd-master
-
-```bash
-# 检查 nfd-master 是否存在
-kubectl get pods -A -l app=nfd-master
-
-# 检查调度器日志中的 namespace 发现信息
-kubectl logs -n custom-scheduler -l app=custom-scheduler | grep -i "namespace\|nfd-master"
-```
-
-### 问题 3: 权限问题
-
-```bash
-# 验证 RBAC 配置
-kubectl auth can-i create nodefeaturegroups --as=system:serviceaccount:custom-scheduler:custom-scheduler -n node-feature-discovery
-
-# 检查 ClusterRole
-kubectl describe clusterrole custom-scheduler
-```
-
-### 问题 4: 镜像拉取失败
-
-```bash
-# 检查镜像是否存在
-docker pull docker.io/leoyy6/custom-scheduler:v1.0.0
-
-# 检查 ImagePullSecrets（如果使用私有 registry）
-kubectl get secret -n custom-scheduler
 ```
 
 ## 卸载

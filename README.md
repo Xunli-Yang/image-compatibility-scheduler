@@ -48,19 +48,15 @@ make docker-push
 
 # 3. Deploy to Kubernetes
 make deploy
-
-# 4. Verify deployment
-./scripts/verify-deployment.sh
 ```
+For detailed deployment steps, refer to [DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
-详细部署步骤请参考 [DEPLOYMENT.md](docs/DEPLOYMENT.md)
-
-快速开始指南请参考 [QUICKSTART.md](QUICKSTART.md)
+For quick start guide, refer to [QUICKSTART.md](QUICKSTART.md)
 
 ### Manual Deployment
 
 ```bash
-kubectl apply -f deploy/
+kubectl apply -k deploy/
 ```
 
 ### Undeploy
@@ -68,14 +64,6 @@ kubectl apply -f deploy/
 ```bash
 make undeploy
 ```
-
-## Configuration
-
-The scheduler configuration is stored in `deploy/configmap.yaml`. You can customize:
-
-- Scheduler name
-- Plugin configuration
-- Leader election settings
 
 ## Plugin Details
 
@@ -90,63 +78,100 @@ The plugin implements the Filter extension point and:
 
 ### Namespace Discovery
 
-The plugin automatically discovers the nfd-master namespace by:
+The plugin automatically discovers the nfd-master namespace at runtime:
 
-1. Searching common namespaces (node-feature-discovery, kube-system, default)
-2. If not found, searching all namespaces for pods with label `app=nfd-master`
+1. **Priority Search**: First searches in common namespaces where NFD is typically installed:
+   - `node-feature-discovery`
+   - `kube-system`
+   - `default`
 
-## Development
+2. **Fallback Search**: If not found in common namespaces, searches across all namespaces for pods with the NFD master label selector:
+   - Label: `app.kubernetes.io/name=node-feature-discovery,role=master`
 
-### Run Tests
+3. **Lazy Discovery**: If namespace discovery fails during plugin initialization, it will retry on first use when a Pod needs to be scheduled.
 
-```bash
-make test
-```
-
-### Format Code
-
-```bash
-make fmt
-```
-
-### Lint
-
-```bash
-make lint
-```
+This dynamic approach ensures compatibility with different NFD installation configurations without requiring manual configuration.
 
 ## Verification
 
-### Automated Verification
-
-运行验证脚本进行自动化验证：
-
-```bash
-./scripts/verify-deployment.sh
-```
-
 ### Manual Verification
 
-1. **检查调度器状态**:
+1. **Check scheduler status**:
    ```bash
    kubectl get pods -n custom-scheduler
    kubectl logs -n custom-scheduler -l app=custom-scheduler
    ```
 
-2. **测试调度功能**:
+2. **Test scheduling functionality**:
    ```bash
    kubectl apply -f scripts/test-pod.yaml
    kubectl get pod test-scheduler-pod
    ```
 
-3. **检查 NodeFeatureGroup CRs**:
+3. **Check NodeFeatureGroup CRs**:
    ```bash
-   NFD_NS=$(kubectl get pods -A -l app=nfd-master -o jsonpath='{.items[0].metadata.namespace}')
+   NFD_NS=$(kubectl get pods -A -l app.kubernetes.io/name=node-feature-discovery,role=master -o jsonpath='{.items[0].metadata.namespace}')
    kubectl get nodefeaturegroups -n $NFD_NS
    ```
+For quick verification steps, refer to [QUICKSTART.md](QUICKSTART.md)
+## Test Process
 
-详细验证步骤请参考 [DEPLOYMENT.md](docs/DEPLOYMENT.md#验证步骤)
+For a comprehensive end‑to‑end verification, follow the steps below. A detailed guide is available in [VERFICATION.md](docs/VERFICATION.md).
 
-## License
+### Step 1 – Deploy the Scheduler
+```bash
+make deploy
+kubectl get pods -n custom-scheduler
+```
 
-[Your License Here]
+### Step 2 – Define Compatibility Requirements
+Create a compatibility specification (example in `scripts/compatibility-artifact-kernel-pci.yaml`). The specification describes node features required by your container image.
+
+### Step 3 – Attach the Specification to an Image
+If testing with a real container image, attach the artifact using ORAS:
+```bash
+oras attach --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
+  <image-url> <path-to-spec>.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+```
+### Step 4 – Deploy a Test Pod
+Create a Pod that uses the custom scheduler (`schedulerName: custom-scheduler`) and references the image with compatibility requirements.
+
+### Step 5 – Verify Scheduling Outcome
+1. **Check Pod scheduling**:
+   ```bash
+   kubectl get pod <test-pod> -o wide
+   ```
+   The pod should be scheduled onto a node that satisfies the compatibility rules.
+
+   ![Pod scheduled to compatible node](docs/images/image1.png)
+
+2. **Inspect created NodeFeatureGroup resources**:
+   ```bash
+   kubectl get nodefeaturegroups.nfd.k8s-sigs.io -A
+   kubectl describe nodefeaturegroup <nfg-name>
+   ```
+   You should see a temporary NodeFeatureGroup with rules matching your compatibility specification.
+
+   ![NodeFeatureGroup details](docs/images/image2.png)
+3. **NFD Client results**:
+   Use the NFD client to check which nodes match the compatibility rules.
+
+   ![NFD client results showing compatible nodes](docs/images/image4.png)
+### Step 6 - Verify Incompatible Scheduling
+
+To verify that the scheduler correctly handles incompatibility, create a specification that requires features not present on any node. For example, change the CPU vendor to `AMD` in the compatibility spec.
+```bash
+# attach compatibility artifact to test image
+oras attach --insecure --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
+  docker.io/leoyy6/alpine-simple-test:v7 \
+  scripts/incompatibility-artifact-kernel-pci.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+
+# deploy test-pod
+kubectl apply -f scripts/test-pod.yaml
+```
+The pod should remain in `Pending` state, and the scheduler logs should indicate that no compatible nodes were found.
+![Pod pending due to incompatibility](docs/images/image5-1.png)
+![Scheduler logs showing no compatible nodes](docs/images/image5-2.png)
+
+Use the NFD client to check the nodes with the rules matching results:
+![Validate node results showing no compatible nodes](docs/images/image5-3.png)

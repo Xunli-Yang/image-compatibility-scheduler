@@ -1,0 +1,23 @@
+version: v1alpha1
+compatibilities:
+- description: "My image requirements"
+  rules:
+  - name: "kernel, cpu and pci"
+    matchFeatures:
+    - feature: kernel.loadedmodule
+      matchExpressions:
+        ata_generic: {op: Exists}
+    - feature: cpu.model
+      matchExpressions:
+        vendor_id: {op: In, value: ["AMD"]}
+    matchAny:
+    - matchFeatures:
+      - feature: pci.device
+        matchExpressions:
+          vendor: {op: In, value: ["8086"]}
+          class: {op: In, value: ["0600"]}
+    - matchFeatures:
+      - feature: pci.device
+        matchExpressions:
+          vendor: {op: In, value: ["1b36"]}
+          class: {op: In, value: ["0600"]}
