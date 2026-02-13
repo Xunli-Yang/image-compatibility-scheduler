@@ -153,4 +153,25 @@ Create a Pod that uses the custom scheduler (`schedulerName: custom-scheduler`) 
    You should see a temporary NodeFeatureGroup with rules matching your compatibility specification.
 
    ![NodeFeatureGroup details](docs/images/image2.png)
+3. **NFD Client results**:
+   Use the NFD client to check which nodes match the compatibility rules.
 
+   ![NFD client results showing compatible nodes](docs/images/image4.png)
+### Step 6 - Verify Incompatible Scheduling
+
+To verify that the scheduler correctly handles incompatibility, create a specification that requires features not present on any node. For example, change the CPU vendor to `AMD` in the compatibility spec.
+```bash
+# attach compatibility artifact to test image
+oras attach --insecure --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
+  docker.io/leoyy6/alpine-simple-test:v7 \
+  scripts/incompatibility-artifact-kernel-pci.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+
+# deploy test-pod
+kubectl apply -f scripts/test-pod.yaml
+```
+The pod should remain in `Pending` state, and the scheduler logs should indicate that no compatible nodes were found.
+![Pod pending due to incompatibility](docs/images/image5-1.png)
+![Scheduler logs showing no compatible nodes](docs/images/image5-2.png)
+
+Use the NFD client to check the nodes with the rules matching results:
+![Validate node results showing no compatible nodes](docs/images/image5-3.png)

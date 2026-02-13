@@ -153,6 +153,31 @@ Some issues remain:
   - Have added a retry mechanism to handle this, with a default retry interval of 3 seconds.
   - This issue will occur in pre-group solution.
 
+### View NFD Client results
+Use the NFD client to check the compatibility nodes with the rules matching results:
+
+```bash
+./bin/nfd compat validate-node --image docker.io/leoyy6/alpine-simple-test:v7 --plain-http
+```
+![Validate node results](images/image4.png)
+
+## Step 6 – Test Incompatibility Scenario
+To verify that the scheduler correctly handles incompatibility, create a specification that requires features not present on any node. For example, change the CPU vendor to `AMD` in the compatibility spec.
+```bash
+# attach compatibility artifact to test image
+oras attach --insecure --artifact-type application/vnd.nfd.image-compatibility.v1alpha1 \
+  docker.io/leoyy6/alpine-simple-test:v7 \
+  scripts/incompatibility-artifact-kernel-pci.yaml:application/vnd.nfd.image-compatibility.spec.v1alpha1+yaml
+
+# deploy test-pod
+kubectl apply -f scripts/test-pod.yaml
+```
+The pod should remain in `Pending` state, and the scheduler logs should indicate that no compatible nodes were found.
+![Pod pending due to incompatibility](images/image5-1.png)
+![Scheduler logs showing no compatible nodes](images/image5-2.png)
+
+Use the NFD client to check the nodes with the rules matching results:
+![Validate node results showing no compatible nodes](images/image5-3.png)
 ## Step 6 – Cleanup
 
 Remove the test pod and the scheduler deployment when finished.
