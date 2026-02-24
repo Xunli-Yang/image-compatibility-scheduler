@@ -14,7 +14,11 @@ const (
 	// PluginName is the name of this scheduler plugin.
 	PluginName = "ImageCompatibilityFilter"
 	// NfdMasterLabelSelector is the label selector to find nfd-master pods.
+	// Supports both standard NFD labels (app.kubernetes.io/name=node-feature-discovery,role=master)
+	// and alternative label (app=nfd-master) as OR option.
 	NfdMasterLabelSelector = "app.kubernetes.io/name=node-feature-discovery,role=master"
+	// NfdMasterLabelSelectorAlt is an alternative label selector for nfd-master pods.
+	NfdMasterLabelSelectorAlt = "app=nfd-master"
 	// NfdUpdateGracePeriod is the grace period for NFD updates.
 	NfdUpdateGracePeriod = 3 * time.Second
 )

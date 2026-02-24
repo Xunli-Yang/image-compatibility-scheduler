@@ -24,6 +24,7 @@ spec:
         - /usr/local/bin/custom-scheduler
         - --config=/etc/kubernetes/scheduler-config.yaml
         - --v=2
+        - --feature-gates=DynamicResourceAllocation=false 
         volumeMounts:
         - name: config-volume
           mountPath: /etc/kubernetes

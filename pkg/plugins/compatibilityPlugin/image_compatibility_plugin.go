@@ -70,35 +70,48 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 // discoverNfdMasterNamespace finds the namespace where nfd-master is running
 // by searching for pods with the nfd-master label selector.
 func discoverNfdMasterNamespace(ctx context.Context, clientSet k8sclient.Interface) (string, error) {
+	// Try both label selectors: standard NFD labels and alternative app=nfd-master
+	labelSelectors := []string{NfdMasterLabelSelector, NfdMasterLabelSelectorAlt}
+
 	// Search in common namespaces first
 	namespaces := []string{"node-feature-discovery", "kube-system", "default"}
 
-	for _, ns := range namespaces {
-		pods, err := clientSet.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: NfdMasterLabelSelector,
+	for _, selector := range labelSelectors {
+		for _, ns := range namespaces {
+			pods, err := clientSet.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: selector,
+			})
+			if err != nil {
+				continue
+			}
+			if len(pods.Items) > 0 {
+				log.Printf("Found nfd-master pod in namespace %s using selector %s", ns, selector)
+				return ns, nil
+			}
+		}
+	}
+
+	// If not found in common namespaces, search all namespaces with both selectors
+	for _, selector := range labelSelectors {
+		pods, err := clientSet.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
 		})
 		if err != nil {
+			// Log error but try next selector
+			log.Printf("Failed to list pods with selector %s: %v", selector, err)
 			continue
 		}
 		if len(pods.Items) > 0 {
+			// Return the namespace of the first pod found
+			ns := pods.Items[0].Namespace
+			log.Printf("Found nfd-master pod in namespace %s using selector %s", ns, selector)
 			return ns, nil
 		}
 	}
 
-	// If not found in common namespaces, search all namespaces
-	pods, err := clientSet.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		LabelSelector: NfdMasterLabelSelector,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to list pods: %w", err)
-	}
-	// If not found, return empty namespace with log
-	if len(pods.Items) == 0 {
-		log.Printf("nfd-master pod not found with label selector %s", NfdMasterLabelSelector)
-		return "", nil
-	}
-
-	return pods.Items[0].Namespace, nil
+	// If not found with any selector, return empty namespace with log
+	log.Printf("nfd-master pod not found with label selectors %s or %s", NfdMasterLabelSelector, NfdMasterLabelSelectorAlt)
+	return "", nil
 }
 
 // Name returns the plugin name.

@@ -75,7 +75,7 @@ If you are using a local [Kind](https://kind.sigs.k8s.io/) cluster for testing, 
 
 ```bash
 # Load image to your Kind cluster
-kind load docker-image docker.io/leoyy6/custom-scheduler:v1.0.0
+kind load docker-image docker.io/leoyy6/custom-scheduler:v1.0.0 --name my-cluster
 
 # Or if you built with different tag, use that tag
 kind load docker-image <your-image-tag>
