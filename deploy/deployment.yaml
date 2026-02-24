@@ -20,7 +20,6 @@ spec:
       containers:
       - name: scheduler
         image: docker.io/leoyy6/custom-scheduler:v1.0.0
-        imagePullPolicy: Always
         command:
         - /usr/local/bin/custom-scheduler
         - --config=/etc/kubernetes/scheduler-config.yaml
