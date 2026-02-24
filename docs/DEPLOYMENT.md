@@ -27,27 +27,61 @@ kubectl get crd nodefeaturegroups.nfd.k8s-sigs.io
 ### 2. Build Docker Image
 
 ```bash
-# Build with default configuration
+# Build for amd64 (default)
 make docker-build
 
-# Or specify custom registry and tag
+# Build for arm64
+make docker-build ARCH=arm64
+
+# Build with custom registry and tag
 REGISTRY=docker.io/leoyy6 IMAGE_NAME=custom-scheduler IMAGE_TAG=v1.0.0 make docker-build
+
+# Build arm64 with custom parameters
+REGISTRY=docker.io/leoyy6 IMAGE_NAME=custom-scheduler IMAGE_TAG=v1.0.0 ARCH=arm64 make docker-build
 ```
+
+**Note**: Use `make help` to see all available build options.
 
 ### 3. Push Image to Registry
 
 ```bash
-# Push with default configuration
+# Push amd64 image (default)
 make docker-push
 
-# Or push manually
-docker push docker.io/leoyy6/custom-scheduler:v1.0.0
+# Push arm64 image
+make docker-push ARCH=arm64
+
+# Push with custom registry and tag
+REGISTRY=docker.io/leoyy6 IMAGE_NAME=custom-scheduler IMAGE_TAG=v1.0.0 make docker-push
+
+# Push arm64 with custom parameters
+REGISTRY=docker.io/leoyy6 IMAGE_NAME=custom-scheduler IMAGE_TAG=v1.0.0 ARCH=arm64 make docker-push
 ```
 
 **Note**: If using a private registry, login first:
 ```bash
 docker login docker.io/leoyy6
 ```
+
+**Manual Push (Alternative)**:
+```bash
+# Push image manually (same tag for all architectures)
+docker push docker.io/leoyy6/custom-scheduler:v1.0.0
+```
+
+### 3.1 Load Image to Kind (Optional)
+
+If you are using a local [Kind](https://kind.sigs.k8s.io/) cluster for testing, you can load the built image directly into the cluster instead of pushing to a remote registry:
+
+```bash
+# Load image to your Kind cluster
+kind load docker-image docker.io/leoyy6/custom-scheduler:v1.0.0
+
+# Or if you built with different tag, use that tag
+kind load docker-image <your-image-tag>
+```
+
+**Note**: Make sure your Kind cluster is running and `kind` CLI is installed.
 
 ### 4. Update Image in Deployment File
 

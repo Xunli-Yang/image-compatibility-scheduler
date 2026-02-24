@@ -5,15 +5,20 @@
 ### 1. Build and Deploy
 
 ```bash
-# Build Docker image
+# Build Docker image (amd64 by default)
 make docker-build
 
 # Push image (if using remote registry)
 make docker-push
 
+# Alternative for Kind users: load image to Kind cluster
+kind load docker-image docker.io/leoyy6/custom-scheduler:v1.0.0
+
 # Deploy to Kubernetes
 make deploy
 ```
+
+**Note**: For building other architectures (e.g., arm64), use `make docker-build ARCH=arm64`. See `make help` for more options.
 
 ### 2. Verify Deployment
 
@@ -80,8 +85,9 @@ kubectl get nodefeaturegroups -n $NFD_NS
 # Rebuild image
 make docker-build
 
-# Push new image
+# Push new image (or load to Kind for local testing)
 make docker-push
+# Alternative for Kind: kind load docker-image docker.io/leoyy6/custom-scheduler:v1.0.0
 
 # Restart Deployment
 kubectl rollout restart deployment/custom-scheduler -n custom-scheduler

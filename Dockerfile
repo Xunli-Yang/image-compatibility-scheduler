@@ -13,8 +13,12 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Build arguments for multi-architecture support
+ARG TARGETARCH
+ARG TARGETOS=linux
+
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o custom-scheduler .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o custom-scheduler .
 
 # Runtime stage
 FROM alpine:3.19
