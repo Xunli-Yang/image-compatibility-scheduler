@@ -270,6 +270,59 @@ func (s *CompatibilityState) Clone() fwk.StateData {
 3. **并发冲突**：使用互斥锁保证数据一致性
 4. **部分成功**：如果部分NFG创建失败，仍然缓存成功的NFG
 
+## 垃圾清理机制
+
+### 背景问题
+原始实现使用跨命名空间的 OwnerReference 来实现自动清理，但这会导致 Kubernetes 垃圾收集器异常，NFG 可能在创建后很快被意外删除。
+
+### 新清理机制设计
+为了解决跨命名空间 OwnerReference 的问题，我们实现了基于标签的定期清理机制：
+
+#### 1. 标签关联（替代 OwnerReference）
+- **移除跨命名空间 OwnerReference**：避免垃圾收集器异常
+- **使用标签关联 NFG 和 Pod**：
+  - `pod-name`: Pod 名称
+  - `pod-namespace`: Pod 命名空间
+  - `pod-uid`: Pod UID
+  - `managed-by`: `ImageCompatibilityFilter`
+  - `temporary`: `"true"`
+
+#### 2. 后台定期清理协程
+- **启动时机**：调度器插件初始化时启动
+- **检查频率**：每5分钟检查一次
+- **清理逻辑**：
+  1. 列出所有带有 `managed-by=ImageCompatibilityFilter` 标签的 NFG
+  2. 对于每个 NFG，通过标签获取关联的 Pod 信息
+  3. 检查 Pod 是否还存在
+  4. 如果 Pod 不存在，删除 NFG 并清理缓存
+
+#### 3. 清理流程
+```
+调度器启动
+  ↓
+启动后台清理协程（每5分钟运行）
+  ↓
+列出所有 ImageCompatibilityFilter 管理的 NFG
+  ↓
+对于每个 NFG:
+  - 读取标签获取关联的 Pod 信息
+  - 检查 Pod 是否还存在
+  - 如果 Pod 不存在 → 删除 NFG + 清理缓存
+  - 如果 Pod 存在 → 保留 NFG
+```
+
+#### 4. 关键优势
+1. **解决根本问题**：消除跨命名空间属主引用导致的垃圾收集异常
+2. **自动清理**：Pod 被删除时，对应的 NFG 会在下次检查时被清理
+3. **资源友好**：每5分钟检查一次，不会对系统造成压力
+4. **缓存一致性**：清理 NFG 时同时清理缓存，避免缓存污染
+5. **容错性强**：即使清理失败，下次检查会重试
+
+### 配置参数
+- **清理间隔**：5分钟（硬编码，未来可配置化）
+- **标签选择器**：`managed-by=ImageCompatibilityFilter`
+- **关联标签**：`pod-name`, `pod-namespace`, `pod-uid`
+
 ## 监控指标
 
 建议添加以下监控指标：

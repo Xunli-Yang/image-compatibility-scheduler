@@ -6,7 +6,7 @@ A Kubernetes custom scheduler that filters nodes based on image compatibility us
 
 - **Image Compatibility Filtering**: Filters nodes based on container image compatibility using NodeFeatureGroup CRs
 - **Dynamic Namespace Discovery**: Automatically discovers nfd-master namespace
-- **TTL-based Cleanup**: Temporary NodeFeatureGroup CRs are automatically cleaned up via OwnerReference
+- **Automatic Cleanup**: Temporary NodeFeatureGroup CRs are automatically cleaned up via periodic background cleanup (every 5 minutes)
 
 ## Prerequisites
 

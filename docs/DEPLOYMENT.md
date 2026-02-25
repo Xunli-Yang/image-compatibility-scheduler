@@ -260,16 +260,26 @@ kubectl logs -n custom-scheduler -l app=custom-scheduler | grep "compatible node
 kubectl describe nodefeaturegroup <nfg_name> -n $NFD_NS
 ```
 
-### 5. Verify TTL Cleanup Mechanism
+### 5. Verify Garbage Cleanup Mechanism
+
+The scheduler uses a label-based periodic cleanup mechanism (instead of cross-namespace OwnerReference) to manage NFG lifecycle.
 
 ```bash
 # Delete test Pod
 kubectl delete pod test-scheduler-pod
 
-# Wait a few seconds and check if NodeFeatureGroup is automatically deleted
-sleep 10
+# Wait for cleanup routine to run (up to 5 minutes)
+echo "Waiting for garbage cleanup mechanism to run (up to 5 minutes)..."
+sleep 300
+
+# Check if NodeFeatureGroup is automatically cleaned up
 kubectl get nodefeaturegroups -n $NFD_NS
+
+# You can also view associated NFGs by label
+kubectl get nodefeaturegroups -n $NFD_NS -l managed-by=ImageCompatibilityFilter
 ```
+
+**Note**: Due to the removal of cross-namespace OwnerReference, cleanup is no longer real-time. The scheduler runs a cleanup goroutine every 5 minutes to check and delete NFGs associated with non-existent Pods.
 
 ## Uninstallation
 

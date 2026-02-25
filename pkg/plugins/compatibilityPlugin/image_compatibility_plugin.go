@@ -58,13 +58,18 @@ func New(ctx context.Context, configuration runtime.Object, handle framework.Han
 		// Continue with empty namespace, will be discovered lazily
 	}
 
-	return &ImageCompatibilityPlugin{
+	plugin := &ImageCompatibilityPlugin{
 		handle:             handle,
 		nfdClient:          nfdCli,
 		nfdMasterNamespace: nfdMasterNamespace,
 		args:               args,
 		imageToNFGCache:    make(map[string][]string),
-	}, nil
+	}
+
+	// Start background cleanup goroutine
+	go plugin.startNFGCleanup(ctx)
+
+	return plugin, nil
 }
 
 // discoverNfdMasterNamespace finds the namespace where nfd-master is running
@@ -272,13 +277,18 @@ func (f *ImageCompatibilityPlugin) getValidCachedNFGs(ctx context.Context, image
 	// Verify all cached NFGs still exist
 	validNFGs := []string{}
 	for _, nfgName := range cachedNFGs {
-		if _, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{}); err == nil {
+		_, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{})
+		if err == nil {
 			validNFGs = append(validNFGs, nfgName)
+		} else {
+			// Log the error but continue checking other NFGs
+			log.Printf("NFG %s not found for image %s: %v", nfgName, imageName, err)
 		}
 	}
 
 	if len(validNFGs) == 0 {
 		// All cached NFGs are invalid
+		log.Printf("All cached NFGs for image %s are invalid, removing from cache", imageName)
 		f.removeFromCache(imageName)
 		return nil, false
 	}
@@ -286,7 +296,8 @@ func (f *ImageCompatibilityPlugin) getValidCachedNFGs(ctx context.Context, image
 	// Update cache with only valid NFGs if some were invalid
 	if len(validNFGs) != len(cachedNFGs) {
 		f.updateCacheForImage(imageName, validNFGs)
-		log.Printf("Updated cache for image %s: removed %d invalid NFGs", imageName, len(cachedNFGs)-len(validNFGs))
+		log.Printf("Updated cache for image %s: removed %d invalid NFGs (original: %d, valid: %d)",
+			imageName, len(cachedNFGs)-len(validNFGs), len(cachedNFGs), len(validNFGs))
 	}
 
 	return validNFGs, true
@@ -390,12 +401,99 @@ func (f *ImageCompatibilityPlugin) computeIntersection(ctx context.Context, name
 func (f *ImageCompatibilityPlugin) getNFGNodes(ctx context.Context, namespace, nfgName string) (map[string]struct{}, error) {
 	nfg, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Get(ctx, nfgName, metav1.GetOptions{})
 	if err != nil {
-		return nil, err
+		// NFG not found, return empty nodes map
+		log.Printf("NFG %s not found in namespace %s: %v", nfgName, namespace, err)
+		return make(map[string]struct{}), nil
+	}
+
+	// Check if NFG has status field
+	if nfg.Status.Nodes == nil {
+		log.Printf("NFG %s has empty status.nodes", nfgName)
+		return make(map[string]struct{}), nil
 	}
 
 	nodes := make(map[string]struct{})
 	for _, n := range nfg.Status.Nodes {
 		nodes[n.Name] = struct{}{}
 	}
+
+	log.Printf("NFG %s has %d compatible nodes", nfgName, len(nodes))
 	return nodes, nil
+}
+
+// cleanupOrphanedNFGs periodically cleans up NFGs whose associated Pod no longer exists
+func (f *ImageCompatibilityPlugin) startNFGCleanup(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute) // Check every 5 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("NFG cleanup stopped")
+			return
+		case <-ticker.C:
+			f.cleanupOrphanedNFGs(ctx)
+		}
+	}
+}
+
+// cleanupOrphanedNFGs finds and deletes NFGs whose associated Pods no longer exist
+func (f *ImageCompatibilityPlugin) cleanupOrphanedNFGs(ctx context.Context) {
+	namespace, err := f.getNfdMasterNamespace(ctx)
+	if err != nil || namespace == "" {
+		log.Printf("Cannot cleanup NFGs: failed to get nfd-master namespace: %v", err)
+		return
+	}
+
+	// List all NFGs with managed-by=ImageCompatibilityFilter label
+	nfgs, err := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "managed-by=ImageCompatibilityFilter",
+	})
+	if err != nil {
+		log.Printf("Failed to list NFGs for cleanup: %v", err)
+		return
+	}
+
+	for _, nfg := range nfgs.Items {
+		podName := nfg.Labels["pod-name"]
+		podNamespace := nfg.Labels["pod-namespace"]
+
+		if podName == "" || podNamespace == "" {
+			// NFG doesn't have proper labels, skip
+			continue
+		}
+
+		// Check if Pod still exists
+		_, err := f.handle.ClientSet().CoreV1().Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			// Pod not found or error - delete the NFG
+			log.Printf("Deleting orphaned NFG %s (Pod %s/%s not found)", nfg.Name, podNamespace, podName)
+			deleteErr := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Delete(ctx, nfg.Name, metav1.DeleteOptions{})
+			if deleteErr != nil {
+				log.Printf("Failed to delete NFG %s: %v", nfg.Name, deleteErr)
+			} else {
+				// Also remove from cache
+				f.removeFromCacheByNFGName(nfg.Name)
+			}
+		}
+	}
+}
+
+// removeFromCacheByNFGName removes an NFG from all cache entries
+func (f *ImageCompatibilityPlugin) removeFromCacheByNFGName(nfgName string) {
+	f.imageToNFGCacheMutex.Lock()
+	defer f.imageToNFGCacheMutex.Unlock()
+
+	for image, nfgs := range f.imageToNFGCache {
+		newNFGs := []string{}
+		for _, nfg := range nfgs {
+			if nfg != nfgName {
+				newNFGs = append(newNFGs, nfg)
+			}
+		}
+		if len(newNFGs) != len(nfgs) {
+			f.imageToNFGCache[image] = newNFGs
+			log.Printf("Removed NFG %s from cache for image %s", nfgName, image)
+		}
+	}
 }

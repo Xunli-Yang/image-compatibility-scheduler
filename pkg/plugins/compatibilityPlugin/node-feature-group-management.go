@@ -7,7 +7,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sclient "k8s.io/client-go/kubernetes"
-	"k8s.io/utils/ptr"
 	nfdclientset "sigs.k8s.io/node-feature-discovery/api/generated/clientset/versioned"
 	nfdv1alpha1 "sigs.k8s.io/node-feature-discovery/api/nfd/v1alpha1"
 	artifactcli "sigs.k8s.io/node-feature-discovery/pkg/client-nfd/compat/artifact-client"
@@ -35,30 +34,33 @@ func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx conte
 		return nil, fmt.Errorf("failed to transfer from artifact: %v", err)
 	}
 
-	// Set up OwnerReference for automatic cleanup when Pod is deleted
-	ownerRef := metav1.OwnerReference{
-		APIVersion:         "v1",
-		Kind:               "Pod",
-		Name:               pod.Name,
-		UID:                pod.UID,
-		Controller:         ptr.To(true),
-		BlockOwnerDeletion: ptr.To(true),
-	}
+	// Note: Cross-namespace OwnerReference may cause garbage collection issues
+	// We use labels to associate with Pod instead of cross-namespace OwnerReference
+	// This avoids Kubernetes garbage collector problems
 
 	nfgs := make([]nfdv1alpha1.NodeFeatureGroup, 0)
 	for _, nodeFeatureGroup := range nodeFeatureGroups {
-		// Set metadata with OwnerReference and labels for TTL management
+		// Set metadata and labels for lifecycle management
 		if nodeFeatureGroup.ObjectMeta.Annotations == nil {
 			nodeFeatureGroup.ObjectMeta.Annotations = make(map[string]string)
 		}
 		if nodeFeatureGroup.ObjectMeta.Labels == nil {
 			nodeFeatureGroup.ObjectMeta.Labels = make(map[string]string)
 		}
-		nodeFeatureGroup.ObjectMeta.GenerateName = "image-compat-" + ownerRef.Name + "-"
+		nodeFeatureGroup.ObjectMeta.GenerateName = "image-compat-" + pod.Name + "-"
 		nodeFeatureGroup.ObjectMeta.Name = ""
 		nodeFeatureGroup.ObjectMeta.Labels["managed-by"] = PluginName
 		nodeFeatureGroup.ObjectMeta.Labels["temporary"] = "true"
-		nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
+		// Use labels to associate with Pod
+		nodeFeatureGroup.ObjectMeta.Labels["pod-name"] = pod.Name
+		nodeFeatureGroup.ObjectMeta.Labels["pod-namespace"] = pod.Namespace
+		nodeFeatureGroup.ObjectMeta.Labels["pod-uid"] = string(pod.UID)
+
+		// Add Finalizer for automatic cleanup
+		nodeFeatureGroup.ObjectMeta.Finalizers = []string{"image-compatibility.cleanup"}
+
+		// Do not set cross-namespace OwnerReferences
+		// nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
 		fmt.Printf("Processing NodeFeatureGroup : Name=%q, GenerateName=%q, Namespace=%q\n",
 			nodeFeatureGroup.ObjectMeta.Name, nodeFeatureGroup.ObjectMeta.GenerateName, nodeFeatureGroup.ObjectMeta.Namespace)

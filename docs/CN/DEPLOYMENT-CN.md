@@ -216,16 +216,26 @@ kubectl logs -n custom-scheduler -l app=custom-scheduler | grep "compatible node
 kubectl describe nodefeaturegroup <nfg_name> -n $NFD_NS
 ```
 
-### 5. 验证 TTL 清理机制
+### 5. 验证垃圾清理机制
+
+调度器使用基于标签的定期清理机制（而不是跨命名空间的 OwnerReference）来管理 NFG 生命周期。
 
 ```bash
 # 删除测试 Pod
 kubectl delete pod test-scheduler-pod
 
-# 等待几秒后检查 NodeFeatureGroup 是否被自动删除
-sleep 10
+# 等待清理协程运行（最多5分钟）
+echo "等待垃圾清理机制运行（最多5分钟）..."
+sleep 300
+
+# 检查 NodeFeatureGroup 是否被自动清理
 kubectl get nodefeaturegroups -n $NFD_NS
+
+# 也可以通过标签查看关联的 NFG
+kubectl get nodefeaturegroups -n $NFD_NS -l managed-by=ImageCompatibilityFilter
 ```
+
+**注意**：由于移除了跨命名空间的 OwnerReference，清理不再是实时的。调度器每5分钟运行一次清理协程，检查并删除与已不存在 Pod 关联的 NFG。
 
 ## 卸载
 
