@@ -470,8 +470,9 @@ func (f *ImageCompatibilityPlugin) cleanupOrphanedNFGs(ctx context.Context) {
 			log.Printf("Deleting orphaned NFG %s (Pod %s/%s not found)", nfg.Name, podNamespace, podName)
 			deleteErr := f.nfdClient.NfdV1alpha1().NodeFeatureGroups(namespace).Delete(ctx, nfg.Name, metav1.DeleteOptions{})
 			if deleteErr != nil {
-				log.Printf("Failed to delete NFG %s: %v", nfg.Name, deleteErr)
+				log.Printf("Failed to delete NFG %s: %v (NFG namespace: %s)", nfg.Name, deleteErr, namespace)
 			} else {
+				log.Printf("Successfully deleted orphaned NFG %s", nfg.Name)
 				// Also remove from cache
 				f.removeFromCacheByNFGName(nfg.Name)
 			}

@@ -56,9 +56,6 @@ func (fgm *FeatureGroupManagement) CreateNodeFeatureGroupsFromArtifact(ctx conte
 		nodeFeatureGroup.ObjectMeta.Labels["pod-namespace"] = pod.Namespace
 		nodeFeatureGroup.ObjectMeta.Labels["pod-uid"] = string(pod.UID)
 
-		// Add Finalizer for automatic cleanup
-		nodeFeatureGroup.ObjectMeta.Finalizers = []string{"image-compatibility.cleanup"}
-
 		// Do not set cross-namespace OwnerReferences
 		// nodeFeatureGroup.ObjectMeta.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
