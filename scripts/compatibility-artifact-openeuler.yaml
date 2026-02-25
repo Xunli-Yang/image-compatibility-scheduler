@@ -6,4 +6,4 @@ compatibilities:
     matchFeatures:
     - feature: cpu.model
       matchExpressions:
-        family: {op: In, value: ["31"]}
+        family: {op: In, value: ["6"]}

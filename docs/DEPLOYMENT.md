@@ -156,6 +156,20 @@ curl http://localhost:10259/metrics | grep scheduler
 #### 3.1 Prepare Test Image:
 
 1. Prepare remote test image
+```bash
+# build image locally
+docker build -t docker.io/leoyy6/alpine-simple-test:v7 -f - . <<EOF
+FROM alpine:3.17
+CMD ["/bin/sh"]
+CMD ["tail", "-f", "/dev/null"]
+EOF
+
+# push to registry
+docker push docker.io/leoyy6/alpine-simple-test:v7
+
+# kind load image to Kind cluster (if using Kind)
+kind load docker-image docker.io/leoyy6/alpine-simple-test:v7 --name my-cluster
+```
 
 2. Attach compatibility artifact to image:
 ```bash
