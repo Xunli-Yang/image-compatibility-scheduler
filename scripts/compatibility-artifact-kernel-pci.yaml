@@ -6,7 +6,7 @@ compatibilities:
     matchFeatures:
     - feature: kernel.loadedmodule
       matchExpressions:
-        ata_generic: {op: Exists}
+        ip_tables: {op: Exists}
     - feature: cpu.model
       matchExpressions:
         vendor_id: {op: In, value: ["Intel"]}
