@@ -5,12 +5,37 @@ This document details how to deploy and verify the Custom Scheduler plugin.
 ## Prerequisites
 
 1. **Kubernetes cluster** (v1.20+)
-2. **Node Feature Discovery (NFD)** installed
+2. **Node Feature Discovery (NFD)** installed and enable nodefeaturegroupAPI feature
 3. **kubectl** configured and able to access the cluster
 4. **Docker** or container runtime (for building images)
 5. **Make** (optional but recommended)
 
 ## Deployment Steps
+### 0. Prepare Environment
+deploy NFD with nodefeaturegroupAPI enabled. You can use the official NFD manifests and enable the feature gate:
+
+```bash
+kubectl apply -k "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=master"
+
+#enable NodeFeatureGroupAPI feature gate
+cat <<EOF > kustomization.yaml
+resources:
+  - https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=master
+patches:
+  - target:
+      kind: Deployment
+      name: nfd-master
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args
+        value:
+          - "--feature-gates=NodeFeatureGroupAPI=true"
+          - "--v=3"
+EOF
+
+kubectl apply -k .
+kubectl get pods -n node-feature-discovery
+```
 
 ### 1. Verify NFD Installation
 

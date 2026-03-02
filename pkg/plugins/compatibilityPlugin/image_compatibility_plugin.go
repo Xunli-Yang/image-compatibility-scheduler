@@ -408,8 +408,7 @@ func (f *ImageCompatibilityPlugin) getNFGNodes(ctx context.Context, namespace, n
 
 	// Check if NFG has status field
 	if nfg.Status.Nodes == nil {
-		log.Printf("NFG %s has empty status.nodes", nfgName)
-		return make(map[string]struct{}), nil
+		return nil, fmt.Errorf("NFG %s has empty status.nodes, please check the NFD configuration", nfgName)
 	}
 
 	nodes := make(map[string]struct{})
