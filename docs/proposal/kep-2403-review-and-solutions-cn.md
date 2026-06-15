@@ -75,7 +75,7 @@
 
 | # | 主题 | 详情 | 解决方案 | 状态 |
 |---|------|------|---------|------|
-| 1 | **分组同构性验证** | 代表节点采样是正确性的核心支撑，但当前完全委托给管理员，没有验证机制。 | nfd-master 中基于 hash 的同构性验证；`Status.Conditions.Homogeneous=True/False`。若 False，降级到方案 A（对该组逐节点扫描）。可选 `homogeneityGuarantee: enforced` 开关。 | 已达成共识 — 需更新文档 |
+| 1 | **分组同构性验证** | 代表节点采样是正确性的核心支撑，但当前完全委托给管理员，没有验证机制。 | nfd-master 中基于 hash 的同构性验证；`Status.Conditions.Homogeneous=True/False`。Homogeneous 是 NFG status 计算逻辑的内在部分（True → 代表节点匹配 O(1)，False → 逐节点匹配 O(N)），不是 scheduler 的独立校验步骤。scheduler 直接信任 NFG status.nodes。详见第 8 节。 | 已达成共识 — 需更新文档 |
 | 2 | **Prefilter 中的 OCI 拉取** | Registry I/O 在调度热路径上，会触发 rate limit，且忽略 `imagePullSecrets`。 | 引入 pre-scheduler controller 或 admission webhook，按 image digest 预解析兼容性并缓存。参考: sigstore policy-controller, Kyverno verify-images。 | 已达成共识 — 待完成 |
 | 3 | **NFG Kind 过载** | 管理员定义的长期 NFG 和调度器创建的临时 NFG 共享一个 Kind，但生命周期/写入者/RBAC 不同。 | 分离 Kind（如 `NodeCompatibilityQuery`），scheduler 拥有，nfd-master 忽略。参考: Karpenter 的 NodePool vs NodeClaim。 | 已达成共识 — 需进一步分析 |
 | 4 | **同步与写放大** | Prefilter 创建 NFG → Filter 读 `.status`，但 status 更新经过 nfd-master 的 rate-limited workqueue（`rate.Limit(10)`, bucket 100）。 | 如果评估移到 plugin 侧执行，则绕过此瓶颈。否则需要 spec 化 trigger field + 节点粒度更新 API。按 spec hash 去重，使 1000 副本的 Deployment 只创建一个 CR。 | 已达成共识 — 需要架构决策 |
@@ -94,8 +94,8 @@
 
 | # | 问题 | 详情 | 建议方案 | 状态 |
 |---|------|------|---------|------|
-| 1 | **评估归属** | 步骤 2 有歧义 — 是 plugin 执行代表节点匹配并写入 NFG status，还是 nfd-master 做？这是两种不同架构: plugin 侧需要 NodeFeature informers + NFD matcher 库；master 侧需要节点粒度 NFG 更新 API 和 spec 化的 trigger。 | 建议 plugin 侧: 减少 nfd-master 负载，避免 rate-limit 瓶颈，调度器已有 NodeFeature informer。 | 待定 |
-| 2 | **多容器 Pod 组合** | Pod 有多个镜像（app + init + sidecar）。per-image-digest NFG（Filter 取交集）还是 per-pod NFG？这决定了 spec-hash key 和 refcount 粒度。 | 建议 per-image-digest NFG，实现更细粒度的复用。Filter 阶段取交集。spec-hash key = image digest + compatibility spec。无兼容性元数据的镜像跳过 NFG 创建。 | 待定 |
+| 1 | **评估归属** | 步骤 2 有歧义 — 是 plugin 执行代表节点匹配并写入 NFG status，还是 nfd-master 做？这是两种不同架构: plugin 侧需要 NodeFeature informers + NFD matcher 库；master 侧需要节点粒度 NFG 更新 API 和 spec 化的 trigger。 | 采用方案 C（Plugin + Master 协作）: 首次创建由 Plugin 本地计算并写入 status（绕过 nfd-master rate-limit 瓶颈），后续节点特征变化由 Master 响应式更新。两者共享 NFD matcher 库，通过 `status-initialized` annotation 协调 writer。详见第 8 节。 | 已解决 |
+| 2 | **多容器 Pod 组合** | Pod 有多个镜像（app + init + sidecar）。per-image-digest NFG（Filter 取交集）还是 per-pod NFG？这决定了 spec-hash key 和 refcount 粒度。 | 采用 Image 粒度 NFG 方案: 每个 image digest 创建一个 NFG CR，多容器 Pod 在 Filter 阶段对各镜像 NFG 的 status.nodes 取交集。通过 refcount + TTL 管理生命周期。详见第 7 节。 | 已解决 |
 | 3 | **未分组节点** | "不存在兼容节点" 的结论只有在每个节点都属于某个预分组时才成立。目前没有要求分组覆盖整个集群。 | 引入隐式 residual set（未分组节点 → 默认组，逐节点评估），或在文档中明确未分组节点被排除在兼容性调度之外。 | 待定 |
 | 4 | **性能预算假设** | 预算是否假设 warm cache？冷启动 Prefilter 包含 registry RTT + NFG 创建 + 等待 rate-limited nfd-master 的 status — 50ms p99 在冷启动下不可达。 | 区分 warm/cold 路径指标。增加 pod-arrival-to-bind 端到端 p99。定义 "成功率" 的含义及其时间窗口。 | 待定 |
 
@@ -122,21 +122,36 @@
 
 ### 已达成共识的关键技术决策
 
-#### 同构性验证（调度前漂移）
-- NFD-NFG: nfd-master 中基于 hash 的同构性验证
-- `Status.Conditions.Homogeneous=True/False`
-- 调度器: 若 True → 使用代表节点；若 False → 降级到方案 A（对该组逐节点评估）
-- NFD 需要节点粒度的 NFG 更新 API（非全量节点扫描）
+#### 同构性（Homogeneous）的本质
 
-#### 同构性验证（调度后漂移）
-- 对运行中的 Pod 采取不干预策略
-- 记录事件、触发告警、应用 label/taint、人工介入
+- **同构性不是一个独立的"调度时校验步骤"**，而是 NFG status 计算逻辑的内在部分
+- `Homogeneous` condition 是**性能优化指示器**，不是正确性约束
+- `Homogeneous=True` → 计算时用代表节点匹配（O(1)）
+- `Homogeneous=False` → 计算时用逐节点匹配（O(N)）
+- 无论 Homogeneous 是什么值，NFG status.nodes 的结果都是正确的
 
-#### NFG 生命周期 — 基于 Spec 的 Hash 去重
-- 临时 NFG 以兼容性需求规格的 hash 值命名
+#### 调度前漂移处理
+- 节点特征漂移 → NFD worker 上报 → nfd-master 更新 NodeFeature → 自动触发所有相关 NFG 的 status 重新计算
+- nfd-master 重算 admin pre-group NFG: status.nodes + feature hash → 更新 Homogeneous condition
+- nfd-master 重算 image compat NFG: 根据 Homogeneous 选择计算方式 → 更新 status.nodes
+- **scheduler 在 Filter 阶段直接信任 NFG status.nodes，不做额外同构性校验**
+- 之前文档中"若 Homogeneous=False，降级到方案 A"的描述不准确 — 这不是 scheduler 的降级行为，而是 NFG status 计算时的内在逻辑
+
+#### 调度后漂移处理
+- 调度后漂移和同构性是两个独立的问题
+- 调度后漂移: Pod 已在运行，节点特征变了 → 需要监控 + 告警 + 可选迁移
+- 处理策略（可配置）:
+  - `ignore`（默认）: 不干预，Pod 继续运行。兼容性 ≠ 可用性，强制迁移可能比继续运行风险更大
+  - `taint`: 给节点打 taint，阻止新 Pod 调度
+  - `deschedule`: 触发 descheduler 迁移 Pod
+- 检测方式: nfd-master 更新 NFG status 时，对比新旧 status.nodes，找出"被移除的节点"，检查这些节点上是否有使用相关镜像的 Pod，生成 Event
+
+#### NFG 生命周期 — Image 粒度 NFG + refcount + TTL
+- 每个 image digest 对应一个 NFG CR（详见第 7 节）
 - Annotation 中记录引用计数（调度引用时递增，完成时递减）
 - 可配置 TTL（`ephemeral-nfg-idle-timeout`，默认 1 小时）
-- 仅当 usage-count 降至零且超过 TTL 后才触发 GC
+- 仅当 refcount 降至零且超过 TTL 后才触发 GC
+- Pod 异常退出导致 refcount 没递减 → TTL 兜底
 
 #### 调度器 Requeue
 - 若 NFG Status 未就绪 → 标记 Pod 为 unschedulable 并 back off
@@ -150,7 +165,684 @@
 
 #### 同构性配置
 - `NodeFeatureGroup.spec.homogeneityGuarantee: enforced` 开关
-- 若 `disabled`，系统改为执行 pre-bind 验证
+- 仅控制 nfd-master 是否计算 Homogeneous condition，不影响 scheduler
+- 若 `disabled`，nfd-master 跳过 feature hash 计算，始终使用逐节点匹配
+
+---
+
+## 7. 多容器 Pod 兼容性 NFG 设计 — Image 粒度 NFG 方案
+
+### 问题背景
+
+Pod 通常包含多个容器（app + init containers + sidecars），每个容器可能使用不同的镜像。如何为多容器 Pod 生成兼容性 NFG 是一个核心架构决策，涉及两种粒度的权衡:
+
+- **Image 粒度 NFG**: 每个 image digest 创建一个 NFG，复用率高，但引用计数管理复杂，Pod 异常退出时可能导致 refcount 泄漏
+- **Pod 粒度 NFG**: 每个 Pod 创建一个 NFG，生命周期通过 ownerReference 自动管理，但无法跨 Pod 复用相同镜像的兼容性结果
+
+### 设计方案: Image 粒度 NFG + Filter 取交集
+
+直接使用 Image 粒度的 NFG，每个 image digest 对应一个 NFG CR。多容器 Pod 在 Filter 阶段对各镜像 NFG 的 status.nodes 取交集，得到最终兼容节点集合。
+
+```
+每个 image digest → 1 个 NFG CR
+
+NFG-compat-sha256:aaa:
+  spec: {kernel>=6, avx2}
+  status.nodes: [node-1..node-500]
+  annotations:
+    refcount: "3"
+    last-used: <timestamp>
+
+NFG-compat-sha256:bbb:
+  spec: {kernel>=5}
+  status.nodes: [node-1..node-800]
+  annotations:
+    refcount: "2"
+    last-used: <timestamp>
+```
+
+### NFG CR 定义
+
+```yaml
+apiVersion: nfd.k8s-sigs.io/v1alpha1
+kind: NodeFeatureGroup
+metadata:
+  name: compat-sha256-aaa123      # 名称 = "compat-" + image digest 前 12 位
+  labels:
+    nfd.k8s-sigs.io/image-digest: "sha256:aaa123..."
+  annotations:
+    nfd.k8s-sigs.io/refcount: "3"
+    nfd.k8s-sigs.io/last-used: "2026-06-12T10:00:00Z"
+spec:
+  featureGroupRules:
+    - name: "image-compatibility"
+      matchFeatures:
+        - feature: kernel.version
+          matchExpressions:
+            major: {op: In, value: ["6"]}
+        - feature: cpu.cpuid
+          matchExpressions:
+            AVX2: {op: Is, value: true}
+status:
+  nodes:
+    - name: node-1
+    - name: node-2
+    - name: node-5
+```
+
+### 调度流程
+
+```
+Prefilter 阶段:
+  for each container image in Pod:
+    digest = resolve(image)
+    查 K8s API: NFG-compat-{digest} 是否存在?
+      有 → refcount++, 更新 last-used
+      无 → 创建 NFG-compat-{digest} (refcount=1)
+           → 触发节点匹配计算 → 写入 status.nodes
+
+Filter 阶段:
+  compatibleNodes = ∩ (所有镜像 NFG 的 status.nodes)
+  
+  例: Pod 有 image-aaa + image-bbb
+  NFG-aaa.status.nodes = [node-1..node-500]
+  NFG-bbb.status.nodes = [node-1..node-800]
+  compatibleNodes = [node-1..node-500]  ← 交集
+  
+  候选节点 ∩ compatibleNodes → 最终候选
+```
+
+### 缓存一致性
+
+不需要主动管理。NFG status 是 K8s controller 的响应式循环:
+
+```
+节点特征变化
+  → NFD worker 上报新特征
+  → nfd-master 更新 NodeFeature
+  → 触发所有相关 NFG 的 status 重新计算
+     - admin pre-group NFG: 重新计算分组
+     - image compat NFG: 重新计算兼容节点列表
+  → status.nodes 自动更新
+  → scheduler 下次 Filter 时读到的就是最新数据
+```
+
+这就是 K8s controller 模式的天然优势: **声明式 + 响应式，不需要手动管理缓存一致性。**
+
+### GC 策略
+
+```
+Pod 完成/失败时:
+  Informer 监听到 Pod 终态
+  → 对应 NFG refcount--
+
+GC Controller (定期扫描):
+  for each Image Compat NFG:
+    if refcount == 0 && (now - last-used) > TTL:
+      删除 NFG CR
+```
+
+Pod 异常退出导致 refcount 没递减? TTL 兜底。
+
+### 方案对比
+
+| 维度 | Image 粒度 NFG (推荐) | Pod 粒度 NFG | 两层架构 |
+|------|---------------------|-------------|---------|
+| CRD 数量 | 1 (复用现有 NFG Kind) | 1 | 2 (ImageCompatibilityCache + NFG) |
+| 1000 相同 Pod 的 CR 数 | 1 | 1000 | 1 + 1000 |
+| 引用计数复杂度 | 中（image digest 级别） | 低（ownerRef） | 高（mergedSpec 级别） |
+| 缓存一致性 | K8s 声明式天然保证 | K8s 声明式天然保证 | 需手动维护 |
+| 节点特征变化响应 | NFG status 自动重算 | NFG status 自动重算 | 需通知缓存失效 |
+| 多镜像处理 | Filter 取交集（镜像数通常 2-5 个，开销可忽略） | Pod 内一次性计算 | Prefilter 合并 spec |
+| GC | TTL 兜底 | ownerRef 自动 GC | TTL 兜底 |
+| 故障恢复 | 无需恢复，CR 持久化 | 无需恢复，CR 持久化 | 需重建内存缓存 |
+| 多 scheduler 实例 | 天然共享 | 天然共享 | 需同步缓存 |
+
+### 关键设计决策
+
+1. **不引入新 CRD**: 复用现有 NodeFeatureGroup Kind，通过 label 区分 admin pre-group NFG 和 image compat NFG。
+
+2. **Filter 阶段取交集**: 多容器 Pod 在 Filter 阶段对各镜像 NFG 的 status.nodes 取交集。镜像数通常 2-5 个，交集计算开销可忽略。
+
+3. **无兼容性元数据的镜像**: 直接跳过，不创建 NFG CR。等价于"该镜像对节点无兼容性要求"。
+
+4. **缓存未命中时的行为**:
+   - `failurePolicy: Ignore` → 跳过该镜像的兼容性检查，继续调度
+   - `failurePolicy: Fail` → 标记 Pod unschedulable，等待 NFG 创建完成后 requeue
+
+5. **NFG 命名**: `compat-` + image digest 前 12 位，确保唯一性和可追溯性。
+
+6. **RBAC 分离**: 通过 label `nfd.k8s-sigs.io/nfg-type: image-compat` 区分，scheduler plugin 只管理 image compat NFG，nfd-master 只管理 admin pre-group NFG。
+
+---
+
+## 8. NFG Status 计算归属 — Plugin + Master 协作方案
+
+### 问题背景
+
+NFG status 的计算由谁执行？这直接影响调度热路径延迟和系统架构复杂度。
+
+三种可选方案:
+
+| 方案 | 首次计算 | 后续更新 | 优点 | 缺点 |
+|------|---------|---------|------|------|
+| A: 纯 Plugin 侧 | Plugin 本地计算 + 写 status | Plugin 不感知节点变化 | 调度热路径无等待 | 节点变化后 status 过时 |
+| B: 纯 Master 侧 | nfd-master 计算 status | nfd-master 响应式更新 | 单一 writer，符合 controller 模式 | 异步等待链，rate-limit 瓶颈 |
+| C: Plugin + Master 协作 | Plugin 本地计算 + 首次写 status | nfd-master 响应式更新 | 首次无等待 + 后续自动更新 | 两个 writer，需协调 |
+
+### 推荐方案: C（Plugin + Master 协作）
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  触发源 1: 新 image 首次调度（Plugin 侧）                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Prefilter:                                                          │
+│    1. 解析 image digest                                              │
+│    2. 查 K8s API: image compat NFG 是否存在?                         │
+│    3. 不存在 → 创建 NFG CR (spec = 兼容性规则)                       │
+│    4. 读取所有 admin pre-group NFG:                                  │
+│       for each pre-group:                                            │
+│         读取 Homogeneous condition                                   │
+│         if True  → 代表节点匹配 → O(1)                               │
+│         if False → 逐节点匹配 → O(组内节点数)                        │
+│    5. 计算结果写入 NFG status.nodes                                  │
+│    6. 标记 annotation: status-initialized: "true"                    │
+│                                                                      │
+│  Filter:                                                             │
+│    读 NFG status.nodes（已就绪，无等待）                              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  触发源 2: 节点特征变化（Master 侧）                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  节点特征变化                                                        │
+│    → NFD worker 上报                                                 │
+│    → nfd-master 更新 NodeFeature                                     │
+│                                                                      │
+│  Step 1: 更新 admin pre-group NFG                                    │
+│    → 重新计算每个 pre-group 的 status.nodes                          │
+│    → 重新计算 per-group feature hash                                 │
+│    → 更新 Homogeneous condition (True/False)                         │
+│                                                                      │
+│  Step 2: 如果 Homogeneous 翻转 或 节点成员变化                        │
+│    → 遍历所有 image compat NFG (status-initialized: "true")          │
+│    → 对每个 image compat NFG:                                        │
+│        重新执行同构性感知匹配（共享 NFD matcher 库）                   │
+│        更新 status.nodes                                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 两个 Writer 的协调
+
+通过 `status-initialized` annotation 协调:
+- Plugin 首次写入后标记 `status-initialized: "true"`
+- nfd-master 只处理已标记的 NFG 的后续更新
+- 避免 Plugin 和 Master 同时写同一个 NFG
+
+### 写放大分析
+
+Master 侧触发源 2 的写放大:
+
+```
+每次节点特征变化:
+  更新 pre-group NFG: O(P) 次写入 (P = pre-group 数量)
+  更新 image compat NFG: O(I) 次写入 (I = image compat NFG 数量)
+  总写入: O(P + I)
+
+实际场景:
+  P ≈ 10-50 (pre-group 数量)
+  I ≈ 20-200 (去重后的 image digest 数量)
+  节点特征变化频率: 低（软件升级/硬件变更，非每分钟发生）
+  
+  → 写放大可接受
+```
+
+### 关键设计点
+
+1. **Plugin 和 Master 共享 NFD matcher 库**: 同构性感知的匹配逻辑只实现一次，Plugin 和 Master 都引用同一个库。
+
+2. **`status-initialized` annotation 协调两个 writer**:
+   - Plugin 首次写入后标记 `status-initialized: "true"`
+   - Master 只处理已标记的 NFG 的后续更新
+   - 避免 Plugin 和 Master 同时写同一个 NFG
+
+3. **Master 遍历所有 image compat NFG**: 不需要维护 pre-group → image compat NFG 的反向索引。因为 image compat NFG 数量（去重后的 image digest 数）通常远小于节点数，全量遍历开销可接受。
+
+4. **Homogeneous 翻转是低频事件**: 正常情况下 Homogeneous=True 不会频繁变化，所以触发源 2 的全量重算不会频繁发生。
+
+---
+
+## 9. 同构性（Homogeneous）机制修正
+
+### 原描述的问题
+
+KEP 文档中原有的描述:
+> "若 Homogeneous=False，降级到方案 A（对该组逐节点扫描）"
+
+这个描述不准确。Homogeneous 不是 scheduler 的"降级开关"，而是 **NFG status 计算逻辑的内在部分**。
+
+### 修正后的理解
+
+```
+同构性校验 = NFG status 计算逻辑的一部分，不是调度时的独立步骤
+
+计算 image compat NFG 的 status.nodes（无论谁执行）:
+
+  status.nodes = []
+  for each admin pre-group NFG:
+    if Homogeneous == True:
+      取代表节点 → 用 image compat NFG 的 spec 匹配 → O(1)
+      if 匹配 → 该组所有节点加入 status.nodes
+      if 不匹配 → 跳过该组
+    if Homogeneous == False:
+      对该组每个节点 → 用 image compat NFG 的 spec 逐节点匹配 → O(组内节点数)
+      匹配的节点加入 status.nodes
+```
+
+### 两个触发源都使用同一段逻辑
+
+| 触发源 | 执行者 | 触发条件 | 计算范围 |
+|--------|--------|---------|---------|
+| 新 image 首次调度 | Plugin | Prefilter 发现 image compat NFG 不存在 | 单个 NFG |
+| 节点特征变化 / Homogeneous 翻转 | Master | NodeFeature 更新 → 触发 pre-group NFG 重算 → Homogeneous 可能翻转 | 所有 image compat NFG |
+
+### Homogeneous 翻转场景示例
+
+```
+初始状态:
+  PreGroup-A: Homogeneous=True, nodes=[node-1..node-100]
+  ImageCompat-X: status.nodes=[node-1..node-100]  (代表节点匹配成功)
+
+场景: node-50 内核升级，特征漂移
+  → Master 检测到 node-50 特征变化
+  → 重算 PreGroup-A 的 feature hash → hash 变化
+  → Homogeneous: True → False
+
+  → 触发 ImageCompat-X 重算:
+    PreGroup-A 现在 Homogeneous=False
+    → 对 node-1..node-100 逐节点匹配 image compat spec
+    → node-50 不再兼容（内核版本变了）
+    → status.nodes = [node-1..node-49, node-51..node-100]  (去掉 node-50)
+
+  → scheduler 下次调度时读到更新后的 status.nodes
+```
+
+### 对 KEP 文档的影响
+
+| 原描述 | 修正 |
+|--------|------|
+| "若 Homogeneous=False，降级到方案 A（对该组逐节点扫描）" | 这不是 scheduler 的降级行为，而是 NFG status 计算时的内在逻辑 |
+| "scheduler 检查 Homogeneous condition" | scheduler 不需要检查，只读 status.nodes |
+| "同构性校验机制" 作为独立章节 | 移除，合并到 NFG status 计算逻辑中 |
+| "homogeneityGuarantee: enforced 开关" | 保留，但仅控制 Master 是否计算 Homogeneous condition，不影响 scheduler |
+
+### 调度后漂移处理
+
+调度后漂移和同构性是两个独立的问题:
+
+| 场景 | 问题 | 处理方式 |
+|------|------|---------|
+| 调度前漂移 | 调度时 NFG status 是否正确 | NFG 响应式更新，自动保证正确（见第 8 节） |
+| 调度后漂移 | Pod 已在运行，节点特征变了 | 需要监控 + 告警 + 可选迁移 |
+
+#### 调度后漂移的影响
+
+```
+时间线:
+  T1: Pod 调度到 node-50（当时兼容）
+  T2: node-50 内核升级，特征漂移
+  T3: NFD worker 上报 → nfd-master 更新 NFG status
+      node-50 从 image compat NFG 的 status.nodes 中移除
+  
+  问题: Pod 还在 node-50 上运行，但它已经"不兼容"了
+```
+
+#### 处理流程
+
+```
+1. 检测
+   nfd-master 更新 NFG status 时:
+     对比新旧 status.nodes
+     找出"被移除的节点"
+     检查这些节点上是否有使用相关镜像的 Pod
+
+2. 告警
+   生成 Event:
+     kind: Pod
+     reason: NodeCompatibilityDrift
+     message: "Pod is running on node that drifted from
+               compatibility requirements"
+
+3. 处理选项（可配置: postDriftPolicy）
+   - ignore (默认): 不干预，Pod 继续运行
+   - taint: 给节点打 taint，阻止新 Pod 调度
+   - deschedule: 触发 descheduler 迁移 Pod
+```
+
+#### 为什么默认是 ignore
+
+1. **兼容性 ≠ 可用性**: 节点特征漂移不代表 Pod 会崩溃，只是"不再符合推荐的兼容性要求"
+2. **迁移成本**: 强制迁移可能比继续运行风险更大
+3. **人工判断**: 让管理员根据业务场景决定是否迁移
+
+---
+
+## 10. OCI Artifact 预解析 — Mutating Webhook + 内存缓存
+
+### 问题背景
+
+OCI Artifact 拉取（registry I/O）不能放在调度热路径上:
+- Registry 延迟不可控，会直接影响 p99 调度延迟
+- Registry rate limit 可能导致调度阻塞
+- `imagePullSecrets` 在 scheduler plugin 中难以正确获取
+- 镜像兼容性元数据更新（热加载）需要独立于调度流程处理
+
+参考 sigstore policy-controller 和 Kyverno verify-images 的设计模式，采用 **Mutating Webhook + 内存缓存** 方案，在 Pod 创建时同步解析镜像兼容性元数据并创建 ImageCompat NFG CR。
+
+### 参考设计分析
+
+#### sigstore policy-controller 核心模式
+
+- **ClusterImagePolicy CRD**: 集群级策略定义，包含 image glob 匹配模式 + authorities（签名验证配置）
+- **Webhook 拦截**: Pod 创建时拦截，同步验证签名
+- **SignaturePullSecrets**: 支持签名存储在不同 registry，使用独立 pull secrets
+- **namespace 级别控制**: 通过 label（`policy.sigstore.dev/include: "true"`）选择启用范围
+- **no-match-policy**: 可配置不匹配时的行为（warn/allow/deny）
+- **多种 authority 类型**: key（静态公钥）、keyless（Fulcio 无密钥签名）、static（直接 pass/fail）
+- **OCI Image Configuration**: 支持 `fetchConfigFile: true` 拉取镜像配置用于策略评估
+
+#### Kyverno verify-images 核心模式
+
+- **VerifyImagesRule**: 策略规则定义，支持 image 匹配 + 验证规则
+- **Mutating webhook**: 支持将 image tag 替换为 digest（immutability）
+- **imagePullSecrets**: 从 Pod namespace 或策略配置中获取
+- **Failure policy**: `Ignore` / `Enforce` 两种模式
+
+#### NFD 场景的适配
+
+NFD image compatibility 与签名验证的关键差异:
+- 不是验证签名，而是**提取兼容性元数据**并**持久化**为 ImageCompat NFG CR
+- 需要**热加载**: 镜像兼容性元数据可能更新，采用惰性检查（TTL 过期时）
+- 需要与 **nfd-master 协作**: webhook 填 spec，master 算 status.nodes
+- **使用 webhook 同步解析**: 与 sigstore/Kyverno 一致，首批 Pod 即可调度
+
+### 设计方案
+
+#### 整体架构
+
+```
+Pod CREATE → apiserver → Mutating Webhook 拦截
+  │
+  ├─ 1. 提取所有 container image references
+  ├─ 2. 对每个 image:
+  │     查 webhook 内存缓存 (LRU):
+  │       Hit (TTL 未过期) → 拿到 compatibility rules
+  │       Hit (TTL 过期) → HEAD registry 检查 artifact-digest
+  │         若变化 → 重新拉取 → 更新缓存
+  │         若未变 → 刷新 TTL
+  │       Miss → 同步拉取 OCI Artifact → 解析 → 写入缓存
+  ├─ 3. 创建 ImageCompat NFG CR (spec 已填充):
+  │     name = compat-sha256-{digest前12位}
+  │     labels:
+  │       nfd.k8s-sigs.io/nfg-type: image-compat
+  │     annotations:
+  │       nfd.k8s-sigs.io/artifact-digest: sha256:...
+  │       nfd.k8s-sigs.io/image-ref: <原始镜像引用>
+  │       nfd.k8s-sigs.io/last-resolved-at: <time>
+  │       nfd.k8s-sigs.io/refcount: "0"
+  │     spec.featureGroupRules: <解析出的兼容性规则>
+  ├─ 4. 写入 Pod annotation:
+  │     nfd.k8s-sigs.io/image-digests: "sha256:aaa,sha256:bbb"
+  ├─ 5. 放行 Pod
+  │
+  └─ Webhook 延迟:
+       缓存命中 → ~ms 级（API 操作）
+       缓存未命中 → registry RTT + 解析（冷启动，仅首次）
+
+        ↓
+
+nfd-master watch 到新 NFG CR
+  → 计算 status.nodes（同构性感知匹配，见第 8/9 节）
+
+        ↓
+
+Scheduler Plugin (Prefilter):
+  读 Pod annotation 获取 image digests
+  查 ImageCompat NFG status.nodes → 过滤节点
+```
+
+#### 与 sigstore policy-controller 的对照
+
+| sigstore policy-controller | NFD Image Compatibility Webhook | 说明 |
+|---------------------------|--------------------------------|------|
+| ClusterImagePolicy CRD | ImageCompatibilityWebhookConfig ConfigMap | 策略配置（registry、pullSecrets、TTL） |
+| Webhook 拦截 Pod 创建 | Mutating Webhook 拦截 Pod CREATE | 一致 |
+| 验证签名 | 提取兼容性元数据 | 从 OCI Artifact 读取 NFD 定义的 metadata |
+| 验证通过 → 放行 Pod | 解析完成 → 创建 ImageCompat NFG → 放行 | 持久化解析结果 |
+| SignaturePullSecrets | imagePullSecrets 配置 | 支持 registry 认证 |
+| no-match-policy (warn/allow/deny) | failurePolicy (Ignore/Fail) | 缓存未命中时的行为 |
+| namespace label opt-in | namespaceSelector | 控制解析范围 |
+
+#### 与 Kyverno verify-images 的对照
+
+| Kyverno verify-images | NFD Image Compatibility Webhook | 说明 |
+|----------------------|--------------------------------|------|
+| VerifyImagesRule | ImageCompatibilityWebhookConfig | 策略规则 |
+| Mutating webhook (tag→digest) | Webhook 解析 tag → digest + 兼容性元数据 | 确保按 digest 去重 |
+| imagePullSecrets from Pod namespace | 从 Pod namespace 查找 dockerconfigjson Secret | 与 Kyverno 一致 |
+| Failure policy: Ignore/Enforce | failurePolicy: Ignore/Fail | 一致 |
+
+### 配置定义
+
+#### ImageCompatibilityWebhookConfig (ConfigMap)
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nfd-image-compat-webhook-config
+  namespace: nfd-system
+data:
+  config.yaml: |
+    namespaceSelector:
+      matchLabels:
+        nfd.k8s-sigs.io/compatibility-resolve: "true"
+    registries:
+      - pattern: "registry.example.com/**"
+        pullSecretRefs:
+          - namespace: nfd-system
+            name: regcred
+        cacheTTL: 1h
+      - pattern: "**"
+        pullSecretSource: pod-namespace
+        cacheTTL: 30m
+    failurePolicy: Ignore
+    artifactType: "application/vnd.nfd.compatibility.v1"
+    gcPolicy:
+      idleTimeout: 1h
+```
+
+#### ImageCompat NFG (由 webhook 创建)
+
+```yaml
+apiVersion: nfd.k8s-sigs.io/v1alpha1
+kind: NodeFeatureGroup
+metadata:
+  name: compat-sha256-aaa123bb4567
+  labels:
+    nfd.k8s-sigs.io/nfg-type: image-compat
+  annotations:
+    nfd.k8s-sigs.io/artifact-digest: "sha256:artifact-xxx"
+    nfd.k8s-sigs.io/image-ref: "registry.example.com/app@sha256:aaa123bb4567..."
+    nfd.k8s-sigs.io/last-resolved-at: "2026-06-15T10:00:00Z"
+    nfd.k8s-sigs.io/refcount: "3"
+    nfd.k8s-sigs.io/last-used: "2026-06-15T10:05:00Z"
+spec:
+  featureGroupRules:
+    - name: "image-compatibility"
+      matchFeatures:
+        - feature: kernel.version
+          matchExpressions:
+            major: {op: In, value: ["6"]}
+        - feature: cpu.cpuid
+          matchExpressions:
+            AVX2: {op: Is, value: true}
+status:
+  nodes:
+    - name: node-1
+    - name: node-2
+    - name: node-5
+```
+
+### 调度流程
+
+```
+Prefilter 阶段:
+  读 Pod annotation: nfd.k8s-sigs.io/image-digests
+  for each digest:
+    查 K8s API: ImageCompat NFG (compat-sha256-{digest}) 是否存在?
+      存在 → refcount++, 更新 last-used, 读 status.nodes
+      不存在 → Webhook 未创建 NFG，scheduler 降级处理:
+        1. 拉取 OCI Artifact (registry I/O)
+        2. 解析兼容性元数据
+        3. 创建 ImageCompat NFG CR (spec 已填充)
+        4. 等待 nfd-master 计算 status.nodes (通过 requeue 机制)
+        5. 下次调度周期读取 status.nodes
+
+Filter 阶段:
+  compatibleNodes = ∩ (所有镜像 NFG 的 status.nodes)
+  候选节点 ∩ compatibleNodes → 最终候选
+```
+
+**降级调度的延迟影响:**
+- 首次调度某镜像：增加 registry RTT + 解析时间 + nfd-master 计算时间
+- 后续相同镜像：直接读取已创建的 NFG，无额外延迟
+- 降级模式是临时状态，webhook 恢复后新 Pod 回到正常路径
+
+### 故障域分离与降级机制
+
+| 组件 | 职责 | 故障影响 |
+|------|------|---------|
+| Webhook | registry I/O + 解析 + 创建 NFG spec | 降级为 scheduler 阶段解析 |
+| nfd-master | 根据 NFG spec 计算 status.nodes | NFG status 不更新，已有 status 仍可用 |
+| Scheduler plugin | 读 NFG status → 过滤节点 | 无法执行兼容性过滤，按 failurePolicy 降级 |
+
+#### Webhook 故障降级流程
+
+```
+正常路径:
+  Pod CREATE → Webhook 解析 → 创建 NFG → Pod 创建成功
+  → Scheduler 调度时读取 NFG status → 过滤节点
+
+降级路径 (Webhook 故障):
+  Pod CREATE → Webhook 超时/失败 → Pod 创建成功 (无 NFG)
+  → Scheduler 调度时发现 NFG 不存在
+  → Scheduler 降级为同步解析:
+      1. 拉取 OCI Artifact
+      2. 解析兼容性元数据
+      3. 创建 ImageCompat NFG CR
+      4. 等待 nfd-master 计算 status.nodes
+      5. 继续调度流程
+```
+
+**降级模式的特点:**
+- Scheduler plugin 需要具备 OCI Artifact 解析能力（与 webhook 共享解析库）
+- 首次调度延迟增加（registry I/O 在调度热路径）
+- 后续相同镜像的 Pod 可复用已创建的 NFG
+- 不影响 Pod 可用性，但影响调度性能
+
+#### Registry 不可达处理
+
+**Webhook 阶段:**
+- 拉取超时（timeoutSeconds: 5）
+- 按 webhook failurePolicy:
+  - Ignore → 放行 Pod，降级为 scheduler 阶段解析
+  - Fail → 拒绝 Pod 创建
+
+**Scheduler 降级阶段:**
+- 拉取超时
+- 按 scheduler failurePolicy:
+  - Ignore → 跳过该镜像的兼容性检查，继续调度
+  - Fail → 标记 Pod unschedulable，等待 registry 恢复
+
+### 热加载流程（惰性检查）
+
+```
+Webhook 内存缓存 TTL 机制:
+  每条缓存条目记录:
+    - compatibility rules
+    - artifact-digest
+    - timestamp
+  
+  缓存命中时:
+    if (now - timestamp) < cacheTTL:
+      直接返回 compatibility rules
+    else:
+      HEAD registry → 获取当前 artifact-digest
+      if 变化:
+        重新拉取 OCI Artifact → 解析 → 更新缓存
+        更新已有 NFG spec.featureGroupRules
+        nfd-master Watch 到 spec 变化 → 自动重算 status.nodes
+      else:
+        刷新 timestamp
+```
+
+不需要后台 goroutine，**惰性检查**：只在缓存 TTL 过期且再次被访问时才检查更新。
+
+### Webhook 配置
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: nfd-image-compat-resolver
+webhooks:
+  - name: resolve.nfd.k8s-sigs.io
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+    namespaceSelector:
+      matchLabels:
+        nfd.k8s-sigs.io/compatibility-resolve: "true"
+    failurePolicy: Ignore
+    sideEffects: None
+    timeoutSeconds: 5
+```
+
+### Metrics
+
+```
+webhook_resolve_total{status="success|failure|timeout"}  # 解析总次数
+webhook_resolve_duration_seconds                          # 解析耗时分布
+webhook_cache_hit_ratio                                   # 缓存命中率
+webhook_registry_request_total{registry, status}          # registry 请求统计
+webhook_cache_refresh_total{changed="true|false"}         # TTL 过期检查次数
+webhook_gc_total                                          # GC 删除 NFG 次数
+```
+
+### 关键设计决策
+
+1. **使用 Mutating Webhook 同步解析**: 与 sigstore policy-controller 和 Kyverno verify-images 一致，webhook 拦截 Pod 创建时同步解析镜像兼容性元数据并创建 NFG。首批 Pod 即可调度，无需等待 controller。
+
+2. **内存 LRU 缓存**: Webhook 进程内维护 LRU 缓存，按 image digest 索引。1000 副本 Deployment 只有第 1 个 Pod 经历 registry RTT，后续 999 个全部命中缓存。
+
+3. **惰性热加载**: 不需要后台 goroutine。缓存 TTL 过期时，下次访问该镜像才 HEAD registry 检查 artifact-digest 是否变化。减少不必要的 registry 请求。
+
+4. **Image digest 不可变性**: Webhook 将 image tag 解析为 digest 写入 Pod annotation，保证调度时使用的 digest 与创建时一致（参考 Kyverno 的 tag→digest mutation）。
+
+5. **复用 ImageCompat NFG**: 不引入新 CRD 存储解析结果。Webhook 创建的 NFG 与 scheduler 使用的 NFG 是同一个 CR，通过 label `nfd.k8s-sigs.io/nfg-type: image-compat` 区分。
+
+6. **imagePullSecrets 策略**: 参考 sigstore 的 `SignaturePullSecrets`，支持两种模式:
+   - `pod-namespace`: 从 Pod 所在 namespace 查找 dockerconfigjson Secret（默认）
+   - `config-ref`: 从 ConfigMap 中指定的 Secret 引用
+
+7. **Webhook 故障降级**: `failurePolicy: Ignore`（默认），webhook 故障时放行 Pod，scheduler 降级为同步解析并创建 NFG。保证功能可用性，但首次调度延迟增加。
 
 ---
 
@@ -158,14 +850,14 @@
 
 | # | 事项 | 负责人 | 优先级 |
 |---|------|--------|--------|
-| 1 | 评估归属: plugin 侧 vs nfd-master 侧 | Xunli-Yang | 高 |
-| 2 | 多容器 Pod 语义: per-image-digest vs per-pod NFG | Xunli-Yang | 高 |
+| 1 | ~~评估归属: plugin 侧 vs nfd-master 侧~~ → 已采用 Plugin + Master 协作方案解决（见第 8 节） | Xunli-Yang | 已解决 |
+| 2 | ~~多容器 Pod 语义: per-image-digest vs per-pod NFG~~ → 已采用 Image 粒度 NFG + Filter 取交集方案解决（见第 7 节） | Xunli-Yang | 已解决 |
 | 3 | 未分组节点行为: residual set 或明确排除 | Xunli-Yang | 中 |
 | 4 | 性能预算: warm vs cold cache 假设 | Xunli-Yang | 中 |
-| 5 | OCI 预解析 controller/webhook 实现 | Xunli-Yang | 高 |
-| 6 | NFG Kind 分离（NodeCompatibilityQuery） | Xunli-Yang | 中 |
+| 5 | ~~OCI 预解析 controller/webhook 实现~~ → 已设计 Image Compatibility Resolver controller（见第 10 节） | Xunli-Yang | 已解决 |
+| 6 | ~~NFG Kind 分离（NodeCompatibilityQuery）~~ → 已采用 label 区分方案: `nfd.k8s-sigs.io/nfg-type: image-compat`，复用现有 NFG Kind（见第 7 节） | Xunli-Yang | 已解决 |
 | 7 | 将所有已达成共识的 checklist 项落实到 KEP 文档正文 | Xunli-Yang | 高 |
 | 8 | 添加归属决策章节并附 KubeCon meeting notes 链接 | Xunli-Yang | 低 |
 | 9 | 从 OWNERS 中指定 sig-scheduling reviewer | ArangoGutierrez | 低 |
-| 10 | Homogeneous=False 时的智能降级（ChaoyiHuang 建议） | Xunli-Yang | 中 |
+| 10 | ~~Homogeneous=False 时的智能降级（ChaoyiHuang 建议）~~ → 已修正: Homogeneous 是 NFG status 计算的内在逻辑，不是 scheduler 的独立校验步骤（见第 9 节） | Xunli-Yang | 已解决 |
 | 11 | Feature gate 名称、metrics、rollback 方案 | Xunli-Yang | 中 |
