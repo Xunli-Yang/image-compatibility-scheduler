@@ -346,8 +346,11 @@ NFG status 的计算由谁执行？这直接影响调度热路径延迟和系统
 │         读取 Homogeneous condition                                   │
 │         if True  → 代表节点匹配 → O(1)                               │
 │         if False → 逐节点匹配 → O(组内节点数)                        │
-│    5. 计算结果写入 NFG status.nodes                                  │
-│    6. 标记 annotation: status-initialized: "true"                    │
+│    5. 处理未分组节点 (residual set):                                  │
+│       ungroupedNodes = allNodes - ∪(pre-group status.nodes)          │
+│       for each ungrouped node → 逐节点匹配                          │
+│    6. 计算结果写入 NFG status.nodes                                  │
+│    7. 标记 annotation: status-initialized: "true"                    │
 │                                                                      │
 │  Filter:                                                             │
 │    读 NFG status.nodes（已就绪，无等待）                              │
@@ -371,6 +374,7 @@ NFG status 的计算由谁执行？这直接影响调度热路径延迟和系统
 │    → 遍历所有 image compat NFG (status-initialized: "true")          │
 │    → 对每个 image compat NFG:                                        │
 │        重新执行同构性感知匹配（共享 NFD matcher 库）                   │
+│        + 处理未分组节点 (residual set)                                │
 │        更新 status.nodes                                             │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
@@ -846,13 +850,93 @@ webhook_gc_total                                          # GC 删除 NFG 次数
 
 ---
 
+## 11. 未分组节点处理 — 隐式 Residual Set
+
+### 问题背景
+
+集群中可能存在不属于任何 admin pre-group 的节点:
+
+```
+集群 100 个节点:
+  80 个节点属于 admin pre-group (Group-A ~ Group-D)
+  20 个节点不属于任何 pre-group
+
+  如果镜像兼容某个未分组节点，但没被选中 → 调度遗漏
+```
+
+### 解决方案: 隐式 Residual Set
+
+nfd-master 天然知道所有节点和所有已分组节点，**未分组节点 = 全部节点 - 所有 pre-group 的节点并集**。在计算 ImageCompat NFG 的 status.nodes 时，自动把未分组节点纳入:
+
+```
+计算 ImageCompat NFG 的 status.nodes:
+
+  compatibleNodes = []
+
+  // 第一步：遍历所有 admin pre-group（同构性感知匹配）
+  for each admin pre-group NFG:
+    if Homogeneous == True:
+      代表节点匹配 → O(1)
+    if Homogeneous == False:
+      逐节点匹配 → O(组内节点数)
+    匹配的节点加入 compatibleNodes
+
+  // 第二步：处理未分组节点（逐节点匹配）
+  ungroupedNodes = allNodes - ∪(所有 pre-group 的 status.nodes)
+  for each node in ungroupedNodes:
+    用 image compat spec 逐节点匹配
+    匹配的节点加入 compatibleNodes
+
+  status.nodes = compatibleNodes
+```
+
+### 为什么推荐这个方案
+
+| 维度 | 隐式 residual set（推荐） | 明确排除 |
+|------|------------------------|---------|
+| 正确性 | 不会遗漏兼容节点 | 可能遗漏兼容节点 |
+| 复杂度 | 低，nfd-master 已有全部节点信息 | 最低 |
+| 管理员负担 | 无需额外操作 | 需要文档说明限制 |
+| 性能影响 | 未分组节点通常少，逐节点匹配开销可忽略 | 无 |
+| 用户体验 | 透明，管理员不需要关心分组覆盖率 | 可能导致"明明有兼容节点却调度失败" |
+
+### 未分组节点的处理特点
+
+1. **始终逐节点匹配**: 未分组节点没有同构性保证，不能用代表节点优化
+2. **性能影响可控**: 未分组节点通常数量少（管理员会把大多数节点分组），逐节点匹配开销可忽略
+3. **无需 scheduler 感知**: scheduler 只读 status.nodes，不关心节点是否来自 pre-group 还是 residual set
+
+### 边界情况
+
+```
+极端情况 1: 所有节点都未分组
+  → 退化为 Proposal A（全量逐节点扫描）
+  → 功能正确，性能退化
+  → 管理员应被提醒配置 pre-group
+
+极端情况 2: 所有节点都已分组
+  → residual set 为空，第二步跳过
+  → 无额外开销
+```
+
+### 对文档各章节的影响
+
+| 章节 | 影响 |
+|------|------|
+| 第 7 节（Image 粒度 NFG） | Filter 取交集逻辑不变，status.nodes 已包含未分组节点 |
+| 第 8 节（Plugin + Master 协作） | 两个触发源的计算逻辑都增加 residual set 步骤 |
+| 第 9 节（同构性） | 同构性只针对 pre-group，residual set 始终逐节点匹配 |
+| Proposal C 描述 | "no compatible nodes" 结论现在覆盖全集群 |
+
+---
+
 ## 总结: 待解决事项
 
 | # | 事项 | 负责人 | 优先级 |
 |---|------|--------|--------|
 | 1 | ~~评估归属: plugin 侧 vs nfd-master 侧~~ → 已采用 Plugin + Master 协作方案解决（见第 8 节） | Xunli-Yang | 已解决 |
 | 2 | ~~多容器 Pod 语义: per-image-digest vs per-pod NFG~~ → 已采用 Image 粒度 NFG + Filter 取交集方案解决（见第 7 节） | Xunli-Yang | 已解决 |
-| 3 | 未分组节点行为: residual set 或明确排除 | Xunli-Yang | 中 |
+| 3 | ~~未分组节点行为: residual set 或明确排除~~ → 已采用隐式 residual set 方案解决（见第 11 节） | Xunli-Yang | 已解决 |
 | 4 | 性能预算: warm vs cold cache 假设 | Xunli-Yang | 中 |
 | 5 | ~~OCI 预解析 controller/webhook 实现~~ → 已设计 Image Compatibility Resolver controller（见第 10 节） | Xunli-Yang | 已解决 |
 | 6 | ~~NFG Kind 分离（NodeCompatibilityQuery）~~ → 已采用 label 区分方案: `nfd.k8s-sigs.io/nfg-type: image-compat`，复用现有 NFG Kind（见第 7 节） | Xunli-Yang | 已解决 |
