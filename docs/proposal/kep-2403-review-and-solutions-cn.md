@@ -1029,46 +1029,34 @@ nfd-master 天然知道所有节点和所有已分组节点，**未分组节点 
 
 | 指标 | 定义 | 说明 |
 |------|------|------|
-| **Prefilter Latency** | Prefilter 阶段执行时间（不含 requeue 等待） | 衡量 plugin 计算开销 |
-| **Filter Latency** | Filter 阶段执行时间 | 衡量交集计算开销 |
-| **Pod-Arrival-to-Bind** | Pod 进入调度队列到成功绑定的端到端延迟 | **用户可观测指标** |
-| **Success Rate** | 在 5 秒时间窗口内成功绑定的 Pod 比例 | 明确时间窗口 |
+| **Prefilter Latency** | Prefilter 阶段执行时间（不含 requeue 等待） | 衡量 plugin 计算开销，包含 feature 匹配计算、ICQ status 更新 |
+| **Filter Latency** | Filter 阶段执行时间 | 衡量交集计算开销，包含 nodeSelector/affinity 适配 |
+| **Pod-Arrival-to-Bind** | Pod 进入调度队列到成功绑定的端到端延迟 | **用户可观测指标**，包含完整调度周期和排队时间 |
+| **1000 Pods Scheduling Duration** | 并发调度 1000 个 Pod 的总时长 | 衡量批量调度性能，scheduler 异步并发处理 |
 
 ### 修正后的性能目标
 
-#### Warm Cache (NFG 已存在)
+#### Warm Cache (ICQ 已存在，informer 已预热)
 
-| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 成功率 (50 pods/s, 5s 内) |
-|---------|---------------|------------|-------------------------|---------------------------|
-| 1k 节点 | < 5ms | < 5ms | < 50ms | 100% |
-| 5k 节点 | < 10ms | < 10ms | < 100ms | 100% |
-| 10k 节点 | < 20ms | < 20ms | < 200ms | 99.9% |
+| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
+|---------|---------------|------------|-------------------------|-------------------------------|
+| 1k 节点 | < 20ms | < 20ms | < 500ms | < 120s |
+| 5k 节点 | < 50ms | < 50ms | < 1s | < 240s |
+| 10k 节点 | < 100ms | < 100ms | < 2s | < 480s |
 
 #### Cold Cache (首次调度新镜像)
 
-冷路径延迟由三部分组成：registry I/O + NFG CR 创建 + nfd-master status 计算。由于使用 requeue 机制，Prefilter Latency 不包含等待时间，因此用 **Pod-Arrival-to-Bind** 衡量冷路径端到端延迟。
+冷路径延迟由三部分组成：registry I/O + ICQ CR 创建 + status 计算。由于使用 requeue 机制，Prefilter Latency 不包含等待时间，因此用 **Pod-Arrival-to-Bind** 衡量冷路径端到端延迟。
 
-| 场景 | P99 Pod-Arrival-to-Bind | 延迟构成 | 说明 |
-|------|------------------------|---------|------|
-| Webhook 正常 (1k 节点) | < 300ms | registry RTT (~50-100ms) + OCI 解析 (~10-20ms) + NFG create (~20ms) + nfd-master 计算 (~50-100ms) + requeue 调度 (~50ms) | 绝大多数冷路径场景 |
-| Webhook 正常 (5k 节点) | < 500ms | 同上 + nfd-master 计算时间增加 (~100-200ms) | nfd-master 需遍历更多节点 |
-| Webhook 正常 (10k 节点) | < 800ms | 同上 + nfd-master 计算时间进一步增加 (~200-400ms) | 含 residual set 逐节点匹配 |
-| Webhook 故障，scheduler 降级 (1k 节点) | < 1.5s | scheduler 同步 registry RTT (~200-500ms) + 解析 + NFG create + nfd-master 计算 + requeue | 降级模式，延迟显著增加 |
-| Webhook 故障，scheduler 降级 (5k 节点) | < 2s | 同上 + nfd-master 计算时间增加 | |
-| Webhook 故障，scheduler 降级 (10k 节点) | < 3s | 同上 + nfd-master 计算时间进一步增加 | |
-| 后续相同镜像 (任意规模) | 同 warm path | 复用已创建的 NFG，无额外延迟 | 冷路径仅影响首次 |
-
-**冷路径成功率目标:**
-
-| 集群规模 | 冷路径成功率 (5s 内绑定) | 说明 |
-|---------|------------------------|------|
-| 1k 节点 | 100% | webhook 正常 + 降级模式均在 5s 内完成 |
-| 5k 节点 | 100% | 同上 |
-| 10k 节点 | 99.9% | 极端情况下 nfd-master 计算可能接近 5s 边界 |
+| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
+|---------|---------------|------------|-------------------------|-------------------------------|
+| 1k 节点 | < 500ms | < 20ms | < 1s | < 180s |
+| 5k 节点 | < 1s | < 50ms | < 2s | < 360s |
+| 10k 节点 | < 2s | < 100ms | < 4s | < 600s |
 
 **冷路径指标说明:**
 - **Pod-Arrival-to-Bind**: 包含 requeue 等待时间，是用户实际感知的延迟
-- **成功率**: 首次调度新镜像的 Pod 在 5s 内成功绑定的比例
+- **1000 Pods Scheduling Duration**: 并发调度 1000 个 Pod 的总时长，考虑 scheduler 并发能力
 - **后续相同镜像**: 冷路径只影响每个 image digest 的首次调度，后续 Pod 走 warm path
 
 ---

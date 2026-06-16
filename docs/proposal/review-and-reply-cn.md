@@ -302,38 +302,26 @@ ICQ status 计算自动包含未分组节点：
 我们修订了性能目标，明确了缓存假设：
 
 **指标定义：**
-- **Prefilter Latency**：仅 Prefilter 阶段的时间。不包括 requeue 等待。
-- **Filter Latency**：仅 Filter 阶段的时间。
-- **Pod-Arrival-to-Bind**：从 Pod 进入调度队列到绑定的端到端延迟。**用户可观测指标。**
-- **Success Rate**：在进入调度队列后 **5 秒内**绑定到兼容节点的 Pod 百分比。
+- **Prefilter Latency**：Prefilter 阶段执行时间（不含 requeue 等待）。包含 feature 匹配计算、ICQ status 更新。
+- **Filter Latency**：Filter 阶段执行时间。包含 nodeSelector/affinity 适配。
+- **Pod-Arrival-to-Bind**：从 Pod 进入调度队列到绑定的端到端延迟。**用户可观测指标。** 包含完整调度周期和排队时间。
+- **1000 Pods Scheduling Duration**：并发调度 1000 个 Pod 的总时长。衡量批量调度性能，scheduler 异步并发处理。
 
 **热缓存（ICQ 已存在，informer 已预热）：**
 
-| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 成功率 (50 pods/s, 5s 截止时间) |
+| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
 |---------|---------------|------------|-------------------------|-------------------------------|
-| 1k | < 5ms | < 5ms | < 50ms | 100% |
-| 5k | < 10ms | < 10ms | < 100ms | 100% |
-| 10k | < 20ms | < 20ms | < 200ms | 99.9% |
+| 1k | < 20ms | < 20ms | < 500ms | < 120s |
+| 5k | < 50ms | < 50ms | < 1s | < 240s |
+| 10k | < 100ms | < 100ms | < 2s | < 480s |
 
 **冷缓存（首次调度新镜像）：**
 
-| 场景 | P99 Pod-Arrival-to-Bind | 延迟分解 |
-|------|------------------------|---------|
-| Webhook 正常, 1k | < 300ms | registry RTT (~50-100ms) + OCI 解析 (~10-20ms) + ICQ 创建 (~20ms) + nfd-master 计算 (~50-100ms) + requeue (~50ms) |
-| Webhook 正常, 5k | < 500ms | nfd-master 计算随节点数增加 |
-| Webhook 正常, 10k | < 800ms | 包含 residual set 逐节点匹配 |
-| Webhook 故障, 调度器降级, 1k | < 1.5s | 调度器中同步 OCI 拉取 |
-| Webhook 故障, 调度器降级, 5k | < 2s | |
-| Webhook 故障, 调度器降级, 10k | < 3s | |
-| 后续相同镜像 | 同热路径 | ICQ 复用，零额外延迟 |
-
-**冷缓存成功率：**
-
-| 集群规模 | 成功率 (5s 截止时间) | 说明 |
-|---------|---------------------|------|
-| 1k | 100% | webhook 正常和降级模式都在 5s 内完成 |
-| 5k | 100% | |
-| 10k | 99.9% | nfd-master 计算接近 5s 边界的边缘情况 |
+| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
+|---------|---------------|------------|-------------------------|-------------------------------|
+| 1k | < 500ms | < 20ms | < 1s | < 180s |
+| 5k | < 1s | < 50ms | < 2s | < 360s |
+| 10k | < 2s | < 100ms | < 4s | < 600s |
 
 **关键洞察：** 冷路径只影响每个 image digest 的第一个 Pod。后续使用相同镜像的 Pod 走热路径。在典型工作负载中，初始部署后冷路径事件很少见。
 
