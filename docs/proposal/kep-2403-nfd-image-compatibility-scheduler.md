@@ -282,11 +282,11 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 
     - **Performance Test Baseline (Cold Cache — first scheduling of new image):**
 
-| Cluster Size (Nodes) | P99 Pod-Arrival-to-Bind | Latency Breakdown |
-| :--- | :--- | :--- |
-| **1k** | < 300ms | registry RTT (~50-100ms) + OCI parse (~10-20ms) + ICQ create (~20ms) + status compute (~50-100ms) + requeue (~50ms) |
-| **5k** | < 500ms | status compute increases with node count |
-| **10k** | < 800ms | includes residual set per-node matching | 
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | Success Rate (50 pods/s, 5s deadline) |
+| :--- | :--- | :--- | :--- | :--- |
+| **1k** | < 50ms | < 5ms | < 300ms | 100% |
+| **5k** | < 100ms | < 5ms | < 500ms | 100% |
+| **10k** | < 200ms | < 10ms | < 800ms | 99.9% | 
 
 ### Graduation Criteria
 
