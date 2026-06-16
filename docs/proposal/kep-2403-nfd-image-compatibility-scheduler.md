@@ -7,7 +7,6 @@
 - [Proposal](#proposal)
   - [User Stories](#user-stories)
   - [Risks and Mitigations](#risks-and-mitigations)
-    - [Group Homogeneity Enforcement](#group-homogeneity-enforcement)
     - [Node Features Drift Handling](#node-features-drift-handling)
     - [NFG Status Update Latency](#nfg-status-update-latency)
 - [Design Details](#design-details)
@@ -57,21 +56,17 @@ The first phase of [KEP-1845 Proposal](https://github.com/kubernetes-sigs/node-f
 When deploying applications that require specific hardware or software features (e.g., AVX2 support, specific kernel versions, or GPU availability), users want to ensure that their pods are scheduled only on nodes that meet these compatibility requirements. This is particularly important for workloads in high-performance computing, machine learning, and other specialized domains where compatibility directly impacts performance and functionality.
 
 ### Risks and Mitigations
-#### Group Homogeneity Enforcement
-Group homogeneity is critical for proposal C to ensure that representative node checks accurately reflect the compatibility of the entire group. How to make sure that all nodes within a pre-group are actually homogeneous?
-
-Cluster administrators are responsible for ensuring homogeneity when they define the pre-groups. It's mandatory for cluster administrators and up to the group strategy. It's similar to how node pools are managed in many large scale clusters. The scheduler plugin internally detects homogeneity by comparing node features when computing ICQ status, and falls back to per-node matching when inconsistency is detected. No explicit `Homogeneous` field is introduced to keep the design simple.
 
 #### Node Features Drift Handling
 When node features drift over time (e.g., due to software updates or hardware changes), it can lead to mismatches between the pre-group definitions and the actual node capabilities. This drift can compromise the effectiveness of the pre-grouping strategy.
 It can be divided into two scenarios:
-1. **Drift Before Scheduling:** The scheduler plugin recomputes ICQ status when it detects NodeFeature changes via informer. Drifted nodes are automatically removed from `compatibleNodes`. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
+1. **Drift Before Scheduling:** The nfd-master detects feature drift and updates the `NodeFeatureGroup` status accordingly. It ensures the pre-grouping remains homogeneous. Drifted nodes are automatically removed from `NodeFeatureGroup` status. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
 2. **Drift After Scheduling:** When drift happens after a pod has been scheduled, the scheduler plugin detects affected pods and alerts administrators through:
    - **Pod labels**: `nfd.k8s-sigs.io/compatibility-drift: "true"`, `nfd.k8s-sigs.io/drift-node`, `nfd.k8s-sigs.io/drift-time`
    - **Structured logs**: JSON format with pod/node/image/drifted_features details
    - **K8s Events**: Warning events with `reason: NodeCompatibilityDrift`
    
-   Administrators can query affected pods via label selector and decide whether to migrate (e.g., `kubectl drain`). No automatic migration is performed to avoid intrusive operations.
+   Administrators can query affected pods via label selector and decide whether to migrate. No automatic migration is performed to avoid intrusive operations.
 
 #### NFG Status Update Latency
 If `NodeFeatureGroup` status updates are delayed, it can lead to stale information being used during the scheduling process. This latency can impact the accuracy of compatibility checks and potentially result in suboptimal scheduling decisions. However, since the pre-grouping can reduce the latency of NFG updates, the impact of this latency is limited. The **PreBind phase** provides a final validation step before binding, ensuring that any update latency is accounted for and stale status is caught before pod placement.
@@ -192,7 +187,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - For a Deployment with 1000 replicas of the same image, only the first Pod triggers a registry fetch; the remaining 999 Pods reuse the existing ICQ CR.
 
 3. **Failure Policy for Compatibility Resolution (Scheduling Phase):**
-   - When the webhook fails to fetch the OCI artifact, it creates an ICQ with `status.conditions[Ready]=False`. The scheduler plugin executes the failure policy during Prefilter:
+   - When the webhook fails to fetch the OCI artifact, it creates an ICQ with `status.conditions[Ready]=False`. The scheduler plugin executes the failure policy during Prefilter, configured by  global  parameter `defaultCompatibilityFailurePolicy`:
    - **Ignore (Fail-open, default):** Skips compatibility check, allows scheduling on any node. Suitable for development clusters.
    - **Fail (Fail-closed):** Marks Pod as Unschedulable, retries when registry recovers. Suitable for production clusters.
    - **Two-level policy:** Cluster-level default via scheduler config, per-pod override via annotation `nfd.k8s-sigs.io/compatibility-policy`.
@@ -217,7 +212,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 7. **Ungrouped Node Handling (Status Computation):**
    - Nodes that do not belong to any `NodeFeatureGroup` are automatically handled through an implicit residual set mechanism.
    - During ICQ status computation, the scheduler plugin identifies ungrouped nodes: `ungroupedNodes = allNodes - ∪(all pre-group status.nodes)`.
-   - Ungrouped nodes are evaluated individually using per-node matching (no representative node optimization, since there is no homogeneity guarantee).
+   - Ungrouped nodes are evaluated individually using per-node matching.
    - Matching ungrouped nodes are added to `status.compatibleNodes` alongside matched pre-group nodes.
    - This ensures that ungrouped nodes are not excluded from compatibility scheduling, while maintaining the performance benefits of pre-grouping for grouped nodes.
    - If all nodes are ungrouped, the system degrades gracefully to full per-node scanning (O(N) complexity).
@@ -277,13 +272,25 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
     - **Stale ICQ Status:** Artificially inject a delay in ICQ status computation to verify that PreBind validation catches the staleness and rejects binding.
     - **Node Feature Drift During Scheduling:** Simulate a node feature change between Prefilter and PreBind to verify that PreBind validation rejects the drifted node.
 - **Performance Tests:** Measure scheduling latency and ICQ update overhead under simulated heavy loads using Kwok (at 1k, 5k, and 10k nodes).
-    - **Performance Targets:**
+    - **Performance Test Baseline (Warm Cache — ICQ exists, informer warmed):**
 
-| Cluster Size (Nodes) | P99 Prefilter Latency | P99 Scheduling Latency | Success Rate at 50 Pods/s Arrival Rate |
-| :--- | :--- | :--- | :--- | 
-| **1k** | < 50ms | < 100ms | 100% |
-| **5k** | < 100ms | < 200ms | 99.9% | 
-| **10k** | < 250ms | < 500ms | 99% | 
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | Success Rate (50 pods/s, 5s deadline) |
+| :--- | :--- | :--- | :--- | :--- |
+| **1k** | < 5ms | < 5ms | < 50ms | 100% |
+| **5k** | < 10ms | < 10ms | < 100ms | 100% |
+| **10k** | < 20ms | < 20ms | < 200ms | 99.9% |
+
+    - **Performance Test Baseline (Cold Cache — first scheduling of new image):**
+
+| Scenario | P99 Pod-Arrival-to-Bind | Latency Breakdown |
+| :--- | :--- | :--- |
+| Webhook normal, 1k | < 300ms | registry RTT (~50-100ms) + OCI parse (~10-20ms) + ICQ create (~20ms) + status compute (~50-100ms) + requeue (~50ms) |
+| Webhook normal, 5k | < 500ms | status compute increases with node count |
+| Webhook normal, 10k | < 800ms | includes residual set per-node matching |
+| Webhook failure, scheduler fallback, 1k | < 1.5s | synchronous OCI fetch in scheduler |
+| Webhook failure, scheduler fallback, 5k | < 2s | |
+| Webhook failure, scheduler fallback, 10k | < 3s | |
+| Subsequent pods (same image) | Same as warm cache | ICQ reused, zero additional latency | 
 
 ### Graduation Criteria
 
@@ -291,10 +298,10 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 - Core Functionality Implementation: Complete the core development of the image compatibility scheduling plugin and NFG features.
 - Basic Verification: Complete full E2E testing in a 100-node cluster to ensure all features are fully operational.
 #### Beta
-- Scalability Simulation: Complete simulation verification on a 5,000-node cluster, ensuring P99 Prefilter Latency < 100ms.
-- Fault Tolerance: Validate system recovery capabilities under abnormal scenarios (e.g., Registry latency/downtime, NFD-Master restarts), achieving a success rate greater than 99.9%.
+- Scalability Simulation: Complete simulation verification on a 5,000-node cluster, meeting warm-cache test baseline (P99 Pod-Arrival-to-Bind < 100ms).
+- Fault Tolerance: Validate system recovery capabilities under abnormal scenarios (e.g., Registry latency/downtime, NFD-Master restarts), achieving a success rate greater than 99.9% (pods bound within 5s).
 #### GA
-- Extreme Performance & Production Verification: Complete long-term stability testing at a scale of 10,000 nodes.
+- Extreme Performance & Production Verification: Complete long-term stability testing at a scale of 10,000 nodes, meeting warm-cache test baseline (P99 Pod-Arrival-to-Bind < 200ms).
 - Production Adoption: Gather deployment cases and performance feedback reports under real-world workloads from at least 2 independent production environments.
 
 ## Implementation History
