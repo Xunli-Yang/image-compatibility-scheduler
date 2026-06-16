@@ -28,7 +28,7 @@
 ## Summary
 
 Cloud-native technologies are being adopted by high-demand industries where container compatibility is critical for service performance and cluster preparation. The integration of workloads requiring specific resource adaptations (acceleration, specific networking behavior, ..) can quickly become complex and often involves multiple back-and-forths between the infrastructure teams and workload vendors. A convergence is usually necessary to align application needs with available resources. Experience shows that this is a significant cause of deployment delays.
-Building upon the first phase of [KEP-1845 Proposal](https://github.com/kubernetes-sigs/node-feature-discovery/blob/master/enhancements/1845-nfd-image-compatibility/README.md), which completed node compatibility validation, this proposal introduces a compatibility scheduling plugin. This plugin utilizes `NodeFeatureGroup` to filter nodes that meet compatibility requirements. It effectively schedules pods to compatible nodes, enabling automated and intelligent compatibility scheduling decisions to meet the application's need for a specific, compatible environment.
+Building upon the first phase of [KEP-1845 Proposal](https://github.com/kubernetes-sigs/node-feature-discovery/blob/master/enhancements/1845-nfd-image-compatibility/README.md), which completed node compatibility validation, this proposal introduces a compatibility scheduling plugin. This plugin introduces a new `ImageCompatibilityQuery` CRD to filter nodes that meet compatibility requirements, while leveraging existing `NodeFeatureGroup` for node pre-grouping optimization. It effectively schedules pods to compatible nodes, enabling automated and intelligent compatibility scheduling decisions to meet the application's need for a specific, compatible environment.
 
 ## Motivation
 
@@ -37,7 +37,8 @@ The first phase of [KEP-1845 Proposal](https://github.com/kubernetes-sigs/node-f
 ### Goals
 
 - Implement an image compatibility scheduling plugin based on NFD to schedule Pods to compatible nodes, providing a production-ready scheduling extension for tracking image compatibility requirements.
-- Enhance NFD to implement an NFG update API targeted at specific nodes (node-granular updates) rather than triggering a full node scan.
+- Introduce a new `ImageCompatibilityQuery` CRD to represent per-image compatibility queries, managed by the scheduler plugin.
+- Leverage existing `NodeFeatureGroup` for node pre-grouping to optimize scheduling performance from O(N) to O(G) complexity.
 
 ### Non-Goals
 
@@ -54,54 +55,108 @@ When deploying applications that require specific hardware or software features 
 #### Group Homogeneity Enforcement
 Group homogeneity is critical for proposal C to ensure that representative node checks accurately reflect the compatibility of the entire group. How to make sure that all nodes within a pre-group are actually homogeneous?
 
-Cluster administrators are responsible for ensuring homogeneity when they define the pre-groups. It's mandatory for cluster administrators and up to the group strategy. It's similar to how node pools are managed in many large scale clusters.
+Cluster administrators are responsible for ensuring homogeneity when they define the pre-groups. It's mandatory for cluster administrators and up to the group strategy. It's similar to how node pools are managed in many large scale clusters. The scheduler plugin internally detects homogeneity by comparing node features when computing ICQ status, and falls back to per-node matching when inconsistency is detected. No explicit `Homogeneous` field is introduced to keep the design simple.
 
 #### Node Features Drift Handling
 When node features drift over time (e.g., due to software updates or hardware changes), it can lead to mismatches between the pre-group definitions and the actual node capabilities. This drift can compromise the effectiveness of the pre-grouping strategy.
 It can be divided into two scenarios:
-1. **Drift Before Scheduling:** If a node drifts before the scheduling process, the pre-groups will be updated accordingly during the next `NodeFeatureGroup` update (trigger immediately). Thus, the scheduling process will always work with the most current node features.
-2. **Drift After Scheduling:** When drift happens after the scheduling process, the scheduled pods will not be affected until next schedule time. --We'll need to add a monitoring mechanism to watch for drifted nodes, alert, and have administrators trigger rescheduling.
+1. **Drift Before Scheduling:** The scheduler plugin recomputes ICQ status when it detects NodeFeature changes via informer. Drifted nodes are automatically removed from `compatibleNodes`. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
+2. **Drift After Scheduling:** When drift happens after a pod has been scheduled, the scheduler plugin detects affected pods and alerts administrators through:
+   - **Pod labels**: `nfd.k8s-sigs.io/compatibility-drift: "true"`, `nfd.k8s-sigs.io/drift-node`, `nfd.k8s-sigs.io/drift-time`
+   - **Structured logs**: JSON format with pod/node/image/drifted_features details
+   - **K8s Events**: Warning events with `reason: NodeCompatibilityDrift`
+   
+   Administrators can query affected pods via label selector and decide whether to migrate (e.g., `kubectl drain`). No automatic migration is performed to avoid intrusive operations.
 
 #### NFG Status Update Latency
-If `NodeFeatureGroup` status updates are delayed, it can lead to stale information being used during the scheduling process. This latency can impact the accuracy of compatibility checks and potentially result in suboptimal scheduling decisions. However, since the pre-grouping can reduce the latency of NFG updates, the impact of this latency is limited. Still, adding a last-second validation of node features before the final binding step could be considered to further mitigate this risk.
+If `NodeFeatureGroup` status updates are delayed, it can lead to stale information being used during the scheduling process. This latency can impact the accuracy of compatibility checks and potentially result in suboptimal scheduling decisions. However, since the pre-grouping can reduce the latency of NFG updates, the impact of this latency is limited. The **PreBind phase** provides a final validation step before binding, ensuring that any update latency is accounted for and stale status is caught before pod placement.
 
 ## Design Details
-The core of this proposal is to implement an `ImageCompatibilityPlugin` within the Kubernetes scheduler framework. During the **Prefilter phase** of the scheduling cycle, this plugin dynamically creates a `NodeFeatureGroup` Custom Resource based on the image compatibility metadata obtained from the OCI Artifact to describe node requirements. It then uses the list of matching nodes in the resource's `status` field to filter compatible candidate nodes during the **Filter phase** of the scheduling cycle.
+The core of this proposal is to implement an `ImageCompatibilityPlugin` within the Kubernetes scheduler framework, working with a new `ImageCompatibilityQuery` (ICQ) CRD and existing `NodeFeatureGroup` (NFG) CRD.
 
-To achieve high-performance scheduling from basic validation to large scale cluster scenarios, we have designed three solutions based on the above foundational architecture. The proposal C is our preferred solution (see below for the pros/cons of the different scenario in [alternative-design-proposals](#alternative-design-proposals)). Node pre-grouping can significantly reduce the number of compatibility checks required during scheduling. 
+**Component Responsibilities:**
+- **Mutating Webhook**: Parses OCI artifacts during Pod admission, creates ICQ CRs with `spec.compatibilityRules` only (no status computation).
+- **Scheduler Plugin**: Computes and updates `status.compatibleNodes` for ICQs, performs PreBind validation, and detects post-scheduling drift.
+- **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only. Does not manage ICQ status.
+
 ### Proposal C: Node Pre-grouping
 
 ![compatibility_scheduler-proposal-C](./proposal-C.png)
 
-For large scale clusters, node pre-grouping is a method to significantly reduce computational overhead. The core idea is to pre-organize all nodes into several groups based on specific, static rules (e.g., `cpu.model`, `kernel.version`). This optimization changes the scheduling complexity from checking **N (number of nodes)** down to just **G** groups (**G<<N**) in the critical path.
+For large scale clusters, node pre-grouping is a method to significantly reduce computational overhead. The core idea is to pre-organize all nodes into several groups based on specific, static rules (e.g., `cpu.model`, `kernel.version`) using `NodeFeatureGroup`. This optimization changes the scheduling complexity from checking **N (number of nodes)** down to just **G** groups (**G<<N**) in the critical path.
+
+**New CRD: ImageCompatibilityQuery (ICQ)**
+
+A new CRD `ImageCompatibilityQuery` is introduced to represent per-image compatibility queries. Unlike `NodeFeatureGroup` which groups nodes, ICQ represents the compatibility requirements of a specific image.
+
+```yaml
+apiVersion: nfd.k8s-sigs.io/v1alpha1
+kind: ImageCompatibilityQuery
+metadata:
+  name: icq-sha256-aaa123      # name = "icq-" + image digest prefix
+  annotations:
+    nfd.k8s-sigs.io/image-ref: "registry.example.com/app@sha256:aaa..."
+    nfd.k8s-sigs.io/refcount: "3"
+    nfd.k8s-sigs.io/last-used: "2026-06-15T10:05:00Z"
+spec:
+  compatibilityRules:
+    - name: "image-compatibility"
+      matchFeatures:
+        - feature: kernel.version
+          matchExpressions:
+            major: {op: In, value: ["6"]}
+        - feature: cpu.cpuid
+          matchExpressions:
+            AVX2: {op: Is, value: true}
+status:
+  compatibleNodes:
+    - name: node-1
+    - name: node-2
+    - name: node-5
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-06-15T10:00:00Z"
+```
 
 The process involves these main phases:
 
-1. **Initial Cluster Grouping:** In the cluster preparation stage, administrator should divide the cluster nodes into several groups by `NodeFeatureGroup`. Multiple `NodeFeatureGroup` Custom Resources (CRs) are created declaratively, each defining a grouping rule. Their status is populated with all matching nodes, completing the pre-grouping setup.
-2. **Scheduling Prefilter Phase:** When a pod requires specific image compatibility, the scheduler plugin:
-   - Fetches the OCI Artifact and extracts its compatibility metadata.
-   - Creates a new `NodeFeatureGroup` CR that represents these dynamic compatibility demands.
-   - **Evaluates compatibility through a representative sampling strategy:** For each group, it **selects one representative node** (for example, the node with the lexicographically smallest name in the group's `status.nodes` list) and checks if this node satisfies the compatibility rules specified in the `NodeFeatureGroup` CR.
-     - If the representative node **matches** the compatibility demands, then **all nodes** within that pre-group are considered compatible, and the entire group is selected .
-     - If the representative node **does not match**, the entire group is skipped, and the evaluation proceeds to the next pre-group.
-   - Updates the status of the compatibility `NodeFeatureGroup` CR with the node group selected. 
-3. **Scheduling Filter Phase:** The scheduler filters candidate nodes by checking their presence in the status of the relevant ephemeral `NodeFeatureGroup` CR, ensuring they meet the computed compatibility requirements.
-4. **Scheduling PreBind Phase (Optional):** An optional final validation step can be added to re-verify node compatibility before binding, ensuring that any update latency is accounted for.
+1. **Initial Cluster Grouping:** In the cluster preparation stage, administrator should divide the cluster nodes into several groups by `NodeFeatureGroup`. Multiple `NodeFeatureGroup` CRs are created declaratively, each defining a grouping rule. Their status is populated with all matching nodes by nfd-master, completing the pre-grouping setup.
+2. **Pod Admission (Webhook):** During Pod creation, the mutating webhook:
+   - Fetches the OCI Artifact for each container image.
+   - Extracts compatibility metadata.
+   - Creates `ImageCompatibilityQuery` CRs with `spec.compatibilityRules` populated (status is not computed by webhook).
+   - Annotates the Pod with image digests: `nfd.k8s-sigs.io/image-digests: "sha256:aaa,sha256:bbb"`.
+3. **Scheduling Prefilter Phase:** The scheduler plugin:
+   - Reads Pod annotations to get image digests.
+   - For each image, checks if ICQ exists and has `status.compatibleNodes` ready.
+   - If ICQ status is not ready, computes it by evaluating compatibility against admin pre-groups:
+     - For each `NodeFeatureGroup`, selects one representative node and checks if it satisfies the ICQ's `spec.compatibilityRules`.
+     - If the representative node matches, all nodes in that pre-group are added to `status.compatibleNodes`.
+     - If the representative node does not match, the entire group is skipped.
+   - Updates `status.compatibleNodes` and sets `conditions[Ready]=True`.
+4. **Scheduling Filter Phase:** The scheduler filters candidate nodes by checking their presence in the `status.compatibleNodes` of all relevant ICQs (intersection for multi-image Pods).
+5. **Scheduling PreBind Phase:** A final validation step that re-verifies node compatibility using the latest node features from informer cache. This catches any race conditions where ICQ status might be stale due to delayed informer updates. If validation fails, the binding is rejected and the pod is rescheduled.
 
-**Example Flow:** Assume 10000 nodes are pre-grouped into 10 groups (`Group-1` to `Group-10`). For a pod with a new compatibility demand, the scheduler creates `NodeFeatureGroup-Compat-X`. It sequentially evaluates the pre-groups. If `Group-1`'s representative node can match compatibility demand, all nodes from `Group-1` are immediately added to `NodeFeatureGroup-Compat-X`. If it doesn't match, the entire `Group-1` is skipped. The process repeats with `Group-2`, and continues sequentially until a matching group is found. This approach reduces the number of compatibility evaluations in the critical path from **10,000 individual node checks** to **at most 10 representative node checks**. If no group's representative node satisfies the demand, the system correctly concludes that no compatible nodes exist in the cluster only under verified homogeneity. If a group's homogeneity is unverified or drifted, then will instead trigger a per-node fallback check to eliminate potential false negatives.
+**Multi-Image Pod Handling:**
+
+For Pods with multiple containers (app + init + sidecars), each image gets its own ICQ. The scheduler computes the intersection of all ICQs' `status.compatibleNodes` during the Filter phase. Images without compatibility metadata are skipped (no ICQ created).
+
+**Example Flow:** Assume 10000 nodes are pre-grouped into 10 groups (`Group-1` to `Group-10`) via `NodeFeatureGroup`. For a pod with a new compatibility demand, the webhook creates `ImageCompatibilityQuery-Compat-X` with spec only. The scheduler plugin evaluates the pre-groups using representative node matching. If `Group-1`'s representative node matches, all nodes from `Group-1` are added to `status.compatibleNodes`. This approach reduces the number of compatibility evaluations from **10,000 individual node checks** to **at most 10 representative node checks**.
 
 **Key Characteristics:**
 
-- **Administrator-Driven Grouping:** Node groups are statically predefined by the cluster administrator in cluster preparation phase. And pre-grouping needs to make sure the node homogeneity within each group.
-- **Representative Node Matching:** The core performance optimization is achieved by evaluating only a **single representative node** from each pre-existing group against the dynamic compatibility rules, rather than scanning all nodes.
-- **Schedule Based on NFG:** During the filter stage, candidate nodes are validated through a simple lookup of the precomputed `NodeFeatureGroup` status.
-- **NFG lifecycle management:** The compatibility `NodeFeatureGroup` CR created during prefilter is ephemeral. When ephemeral CRs created, use OwnerReferences to track their lifecycle. It can be garbage-collected after pod completion to avoid resource bloat. While the pre-defined grouping `NodeFeatureGroup` CRs persist in the cluster.
-- **Last-Second Validation (Optional):** The optional pre-bind phase allows for a final check of node compatibility before binding, accommodating any update latency.
+- **Administrator-Driven Grouping:** Node groups are statically predefined by the cluster administrator using `NodeFeatureGroup` in cluster preparation phase.
+- **Representative Node Matching:** The core performance optimization is achieved by evaluating only a **single representative node** from each pre-existing group against the ICQ's compatibility rules, rather than scanning all nodes.
+- **Scheduler Plugin Manages ICQ:** The scheduler plugin computes and updates `status.compatibleNodes` for ICQs, ensuring tight integration with the scheduling lifecycle.
+- **PreBind Validation:** The PreBind phase provides real-time validation using the latest node features, catching race conditions where ICQ status might be stale.
+- **ICQ Lifecycle Management:** ICQs are named by image digest prefix, enabling deduplication (1000 replicas of the same image → 1 ICQ). Reference counting and TTL-based GC manage lifecycle.
 
 **Exception Handling:**
-- If the OCI Artifact is unreachable or lacks compatibility metadata, the plugin defaults to allowing scheduling on any node, ensuring that the absence of metadata does not block pod deployment. However, the log will record a warning for visibility.
+- If the OCI Artifact is unreachable or lacks compatibility metadata, the webhook skips ICQ creation for that image, and the plugin defaults to allowing scheduling on any node for that image. A warning is logged for visibility.
 - If no pre-group's representative node matches the compatibility demands, the plugin correctly concludes that no compatible nodes exist in the cluster, resulting in a scheduling failure for the pod with logging an error.
 - If a pre-group is found to be empty (i.e., its `status.nodes` list is empty), the plugin skips that group during evaluation, ensuring that only valid groups are considered.
+- If PreBind validation fails (node drifted during scheduling), the binding is rejected and the pod is rescheduled to a compatible node.
 
 **Advantages**
 
@@ -119,19 +174,20 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 
 - **Unit Tests:** Write unit tests covering core logic for the plugin.
 - **Manual e2e Tests:** Validate core end-to-end functionality by deploying a sample pod with compatibility artifacts. Including:
-    - The NodeFeatureGroup updates correctly and the pod is successfully routed to a compatible node.
-    - Spec-Hash deduplication, reference counting and TTL lazy delection apply correctly.
-    - The system smoothly triggers homogeneity verification based on its configurations, and safely downgrades to the pre-bind fallback mechanism when homogeneity fails.
+    - The ImageCompatibilityQuery is created correctly and the pod is successfully routed to a compatible node.
+    - Spec-Hash deduplication, reference counting and TTL lazy deletion apply correctly.
+    - PreBind validation catches stale ICQ status and rejects binding to drifted nodes.
+    - Post-scheduling drift detection labels affected pods and generates events.
     - The default compatibility failure policy triggers.
 - **Fault-Injection Tests:** Explicitly validate system resilience and fallback safety under the following failure modes:
     - **Registry Service Outage / Downtime:** Verify that when metadata becomes unreachable, setting failurePolicy: Fail correctly suspends/rejects the Pod, while setting failurePolicy: Ignore smoothly downgrades the safety policy without stalling the scheduling queue.
-    - **NFD-Master Restart / Crash:** Verify that while the Master is offline, the scheduler can continuously make safe decisions using cached NodeFeatureGroup (NFG) states, and validate that state synchronization latency remains minimal once the Master recovers.
-    - **Stale NFG Status:** Artificially inject an NFD-Master update delay to verify that the scheduling plugin's Watch + Requeue mechanism.
-    - **Massive Homogeneity Disruption:** Randomly modify feature labels on 10% of the nodes within an enforced group to verify that the NFG automatically flips its status to Homogeneous=False and seamlessly triggers the scheduler's fallback to full per-node scans.
-- **Performance Tests:** Measure scheduling latency and NFG update overhead under simulated heavy loads using Kwok (at 1k, 5k, and 10k nodes).
+    - **NFD-Master Restart / Crash:** Verify that while the Master is offline, the scheduler can continuously make safe decisions using cached NodeFeatureGroup states, and validate that state synchronization latency remains minimal once the Master recovers.
+    - **Stale ICQ Status:** Artificially inject a delay in ICQ status computation to verify that PreBind validation catches the staleness and rejects binding.
+    - **Node Feature Drift During Scheduling:** Simulate a node feature change between Prefilter and PreBind to verify that PreBind validation rejects the drifted node.
+- **Performance Tests:** Measure scheduling latency and ICQ update overhead under simulated heavy loads using Kwok (at 1k, 5k, and 10k nodes).
     - **Performance Targets:**
 
-| Cluster Size (Nodes) | P99 Prefilter Latency | P99 Scheduling Latency | Latency	Success Rate at 50 Pods/s Arrival Rate |
+| Cluster Size (Nodes) | P99 Prefilter Latency | P99 Scheduling Latency | Success Rate at 50 Pods/s Arrival Rate |
 | :--- | :--- | :--- | :--- | 
 | **1k** | < 50ms | < 100ms | 100% |
 | **5k** | < 100ms | < 200ms | 99.9% | 
@@ -152,6 +208,12 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 ## Implementation History
 - 2025-12-27: KEP proposal submission
 - 2026-01-20: Update KEP with proposal C(Node pre-grouping) chosen as preferred solution.
+- 2026-06-15: Update KEP with refined architecture:
+  - Introduce `ImageCompatibilityQuery` CRD (separate from `NodeFeatureGroup`)
+  - Clarify component responsibilities: Webhook creates ICQ spec, Scheduler Plugin computes status, nfd-master updates NFG only
+  - Add PreBind validation for real-time drift detection
+  - Add post-scheduling drift detection with label + log + event alerting
+  - Remove explicit `Homogeneous` field; use internal homogeneity detection
 ## Alternatives Considered
 
 ### Use Node Affinity/Node Selector Directly in Pod Spec
