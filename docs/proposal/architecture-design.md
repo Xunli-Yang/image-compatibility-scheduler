@@ -100,34 +100,20 @@
 │   │                              │                                         │ │
 │   │                              ▼                                         │ │
 │   │  ┌──────────────────────────────────────────────────────────────────┐  │ │
-│   │  │ Step 2: Check in-memory LRU cache                                │  │ │
+│   │  │ Step 2: Check ICQ CR & Create if needed                          │  │ │
 │   │  │                                                                   │  │ │
-│   │  │   Cache Key: image digest                                        │  │ │
-│   │  │   Cache Value: compatibility rules                               │  │ │
+│   │  │   for each image:                                                │  │ │
+│   │  │     parse image → digest                                         │  │ │
+│   │  │     query K8s API: ICQ `icq-{digest}` exists?                   │  │ │
+│   │  │       exists → reuse (no creation needed)                        │  │ │
+│   │  │       not exists → fetch OCI Artifact → parse → create ICQ CR   │  │ │
 │   │  │                                                                   │  │ │
-│   │  │   if TTL expired:                                                │  │ │
-│   │  │     HEAD registry → check artifact-digest                        │  │ │
-│   │  │     if changed: refetch & update cache                           │  │ │
-│   │  │                                                                   │  │ │
-│   │  │   if cache miss:                                                 │  │ │
-│   │  │     fetch OCI Artifact → parse → populate cache                  │  │ │
+│   │  │   ICQ CR = persistent cache (stored in etcd)                    │  │ │
 │   │  └──────────────────────────────────────────────────────────────────┘  │ │
 │   │                              │                                         │ │
 │   │                              ▼                                         │ │
 │   │  ┌──────────────────────────────────────────────────────────────────┐  │ │
-│   │  │ Step 3: Create ImageCompatibilityQuery CR                         │  │ │
-│   │  │                                                                   │  │ │
-│   │  │   for each unique image digest:                                  │  │ │
-│   │  │     if ICQ not exists:                                           │  │ │
-│   │  │       create ICQ with spec.compatibilityRules                    │  │ │
-│   │  │       set refcount = 1                                           │  │ │
-│   │  │     else:                                                        │  │ │
-│   │  │       refcount++                                                 │  │ │
-│   │  └──────────────────────────────────────────────────────────────────┘  │ │
-│   │                              │                                         │ │
-│   │                              ▼                                         │ │
-│   │  ┌──────────────────────────────────────────────────────────────────┐  │ │
-│   │  │ Step 4: Annotate Pod & Admit                                     │  │ │
+│   │  │ Step 3: Annotate Pod & Admit                                     │  │ │
 │   │  │                                                                   │  │ │
 │   │  │   Pod annotations:                                               │  │ │
 │   │  │     nfd.k8s-sigs.io/image-digests: "sha256:aaa,sha256:bbb"      │  │ │
@@ -386,11 +372,11 @@
 │                          性能优化层次                                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                               │
-│  Layer 1: Webhook 侧缓存                                                    │
-│  ├─ 内存 LRU 缓存 (按 image digest 索引)                                    │
+│  Layer 1: ICQ CR 持久化缓存                                                 │
+│  ├─ ICQ CR 持久化在 etcd 中 (按 image digest 命名)                          │
 │  ├─ 1000 副本 Deployment → 仅 1 次 registry 拉取                            │
-│  ├─ 惰性热加载 (TTL 过期时 HEAD registry)                                   │
-│  └─ 延迟: 缓存命中 ~ms 级，未命中 ~100-500ms                                │
+│  ├─ 多副本 webhook 共享同一个 etcd 中的 ICQ                                 │
+│  └─ 延迟: ICQ 已存在 ~ms 级，不存在 ~100-500ms                              │
 │                                                                               │
 │  Layer 2: Image Digest 去重                                                   │
 │  ├─ ICQ 按 image digest 命名 (icq-sha256-{prefix})                          │
@@ -398,7 +384,7 @@
 │  ├─ Refcount 跟踪引用数                                                      │
 │  └─ 1000 副本 → 1 个 ICQ CR                                                 │
 │                                                                               │
-│  Layer 3: 预分组加速 (nfd-master 侧)                                        │
+│  Layer 3: 预分组加速 (Scheduler Plugin 侧)                                  │
 │  ├─ 管理员定义 pre-group (NodeFeatureGroup)                                  │
 │  ├─ 代表节点匹配: O(1) per group                                             │
 │  ├─ 隐式同构性检测 (内部实现，不暴露字段)                                     │
@@ -749,11 +735,11 @@ kubectl label pod pod-A -n production nfd.k8s-sigs.io/compatibility-drift-
 │  │ Component       │ Responsibilities                                      │ │
 │  ├─────────────────┼──────────────────────────────────────────────────────┤ │
 │  │ Mutating        │ • Intercept Pod CREATE                                │ │
-│  │ Webhook         │ • Fetch OCI Artifact (with LRU cache)                 │ │
+│  │ Webhook         │ • Fetch OCI Artifact (if ICQ not exists)              │ │
 │  │                 │ • Parse compatibility metadata                        │ │
 │  │                 │ • Create ImageCompatibilityQuery CR (spec only)       │ │
 │  │                 │ • Annotate Pod with image digests                     │ │
-│  │                 │ • Hot-reload (lazy check on TTL expiry)               │ │
+│  │                 │ • Check ICQ existence before creation (reuse)         │ │
 │  ├─────────────────┼──────────────────────────────────────────────────────┤ │
 │  │ nfd-master      │ • Collect NodeFeature from NFD workers                │ │
 │  │                 │ • Update NodeFeatureGroup status.nodes                │ │
@@ -804,8 +790,8 @@ kubectl label pod pod-A -n production nfd.k8s-sigs.io/compatibility-drift-
 │     └─ 理由: 避免调度器复杂度，nfd-master 内部处理                            │
 │                                                                               │
 │  3. Webhook 预解析                                                            │
-│     ├─ Mutating Webhook + 内存 LRU 缓存                                      │
-│     ├─ 惰性热加载 (TTL 过期时检查)                                           │
+│     ├─ Mutating Webhook + ICQ CR 持久化缓存                                  │
+│     ├─ ICQ CR 即持久化缓存，无需内存 LRU                                     │
 │     └─ 理由: 移除 registry I/O 出调度热路径                                   │
 │                                                                               │
 │  4. Image Digest 去重                                                         │

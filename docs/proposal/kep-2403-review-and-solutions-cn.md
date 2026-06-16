@@ -572,7 +572,7 @@ Scheduler Plugin 监听到 NodeFeature 变化，重算 ImageCompatibilityQuery �
 
 ---
 
-## 10. OCI Artifact 预解析 — Mutating Webhook + 内存缓存
+## 10. OCI Artifact 预解析 — Mutating Webhook + ICQ CR 持久化
 
 ### 问题背景
 
@@ -582,7 +582,7 @@ OCI Artifact 拉取（registry I/O）不能放在调度热路径上:
 - `imagePullSecrets` 在 scheduler plugin 中难以正确获取
 - 镜像兼容性元数据更新（热加载）需要独立于调度流程处理
 
-参考 sigstore policy-controller 和 Kyverno verify-images 的设计模式，采用 **Mutating Webhook + 内存缓存** 方案，在 Pod 创建时同步解析镜像兼容性元数据并创建 ImageCompatibilityQuery CR。
+参考 sigstore policy-controller 和 Kyverno verify-images 的设计模式，采用 **Mutating Webhook + ICQ CR 持久化** 方案，在 Pod 创建时同步解析镜像兼容性元数据并创建 ImageCompatibilityQuery CR。ICQ CR 本身就是持久化缓存，无需额外的内存缓存。
 
 ### 参考设计分析
 
@@ -620,13 +620,11 @@ Pod CREATE → apiserver → Mutating Webhook 拦截
   │
   ├─ 1. 提取所有 container image references
   ├─ 2. 对每个 image:
-  │     查 webhook 内存缓存 (LRU):
-  │       Hit (TTL 未过期) → 拿到 compatibility rules
-  │       Hit (TTL 过期) → HEAD registry 检查 artifact-digest
-  │         若变化 → 重新拉取 → 更新缓存
-  │         若未变 → 刷新 TTL
-  │       Miss → 同步拉取 OCI Artifact → 解析 → 写入缓存
-  ├─ 3. 创建 ImageCompatibilityQuery CR (spec 已填充):
+  │     解析 image → digest
+  │     查 K8s API: ICQ `icq-{digest}` 是否存在?
+  │       存在 → 直接复用，不需要创建
+  │       不存在 → 同步拉取 OCI Artifact → 解析 → 创建 ICQ CR
+  ├─ 3. ICQ CR 定义:
   │     name = icq-sha256-{digest前12位}
   │     annotations:
   │       nfd.k8s-sigs.io/image-ref: <原始镜像引用>
@@ -639,10 +637,10 @@ Pod CREATE → apiserver → Mutating Webhook 拦截
   ├─ 5. 放行 Pod
   │
   └─ Webhook 延迟:
-       缓存命中 → ~ms 级（API 操作）
-       缓存未命中 → registry RTT + 解析（冷启动，仅首次）
+       ICQ 已存在 → ~ms 级（API 查询）
+       ICQ 不存在 → registry RTT + 解析 + 创建 CR（仅首次）
 
-         ↓
+          ↓
 
 Scheduler Plugin (Prefilter):
   读 Pod annotation 获取 image digests
@@ -653,6 +651,12 @@ Scheduler Plugin (Prefilter):
   else:
     读取 status.compatibleNodes → 过滤节点
 ```
+
+**设计要点：**
+- **ICQ CR 本身就是持久化缓存** - 一旦创建，所有后续请求都能通过 API server 查到，无需额外的内存缓存
+- **简化 webhook 代码** - 不需要维护 LRU 缓存逻辑，不需要考虑缓存一致性问题
+- **多副本友好** - 多个 webhook 副本共享同一个 etcd 中的 ICQ，无需同步缓存状态
+- **重启不丢失** - ICQ CR 持久化在 etcd 中，webhook 重启不影响
 
 #### 与 sigstore policy-controller 的对照
 
@@ -695,14 +699,10 @@ data:
         pullSecretRefs:
           - namespace: nfd-system
             name: regcred
-        cacheTTL: 1h
       - pattern: "**"
         pullSecretSource: pod-namespace
-        cacheTTL: 30m
     failurePolicy: Ignore
     artifactType: "application/vnd.nfd.compatibility.v1"
-    gcPolicy:
-      idleTimeout: 1h
 ```
 
 #### ImageCompatibilityQuery (由 webhook 创建)
@@ -810,29 +810,31 @@ Filter 阶段:
   - Ignore → 跳过该镜像的兼容性检查，继续调度
   - Fail → 标记 Pod unschedulable，等待 registry 恢复
 
-### 热加载流程（惰性检查）
+### 热加载流程（可选）
 
+ICQ CR 本身不包含热加载机制。如果需要支持镜像兼容性元数据更新，可以采用以下方式：
+
+**方案 1: 手动更新（推荐）**
+- 管理员删除旧的 ICQ CR
+- 下一个 Pod 创建时，webhook 会重新拉取 OCI artifact 并创建新的 ICQ
+
+**方案 2: 后台定期检查（可选）**
 ```
-Webhook 内存缓存 TTL 机制:
-  每条缓存条目记录:
-    - compatibility rules
-    - artifact-digest
-    - timestamp
-  
-  缓存命中时:
-    if (now - timestamp) < cacheTTL:
-      直接返回 compatibility rules
-    else:
-      HEAD registry → 获取当前 artifact-digest
-      if 变化:
-        重新拉取 OCI Artifact → 解析 → 更新缓存
-        更新已有 ICQ spec.compatibilityRules
-        nfd-master Watch 到 spec 变化 → 自动重算 status.compatibleNodes
-      else:
-        刷新 timestamp
+Webhook 后台 goroutine (定期执行，如每小时):
+  for each ICQ in cluster:
+    1. 从 ICQ annotation 读取 artifact-digest
+    2. HEAD registry 获取当前 artifact-digest
+    3. 如果变化:
+       - 重新拉取 OCI Artifact
+       - 更新 ICQ spec.compatibilityRules
+       - 更新 ICQ annotation artifact-digest
+       - Scheduler Plugin Watch 到 spec 变化 → 自动重算 status.compatibleNodes
 ```
 
-不需要后台 goroutine，**惰性检查**：只在缓存 TTL 过期且再次被访问时才检查更新。
+**设计要点：**
+- ICQ CR 是持久化的，不需要内存缓存
+- 热加载是可选功能，可以在后续版本中添加
+- 首次实现可以只支持手动更新，简化实现
 
 ### Webhook 配置
 
@@ -871,9 +873,9 @@ webhook_gc_total                                          # GC 删除 ICQ 次数
 
 1. **使用 Mutating Webhook 同步解析**: 与 sigstore policy-controller 和 Kyverno verify-images 一致，webhook 拦截 Pod 创建时同步解析镜像兼容性元数据并创建 ICQ。首批 Pod 即可调度，无需等待 controller。
 
-2. **内存 LRU 缓存**: Webhook 进程内维护 LRU 缓存，按 image digest 索引。1000 副本 Deployment 只有第 1 个 Pod 经历 registry RTT，后续 999 个全部命中缓存。
+2. **ICQ CR 即持久化缓存**: 无需内存 LRU 缓存。ICQ CR 持久化在 etcd 中，按 image digest 命名。1000 副本 Deployment 只有第 1 个 Pod 经历 registry RTT，后续 999 个直接查到已存在的 ICQ CR。多副本 webhook 共享同一个 etcd 中的 ICQ，无需同步缓存状态。
 
-3. **惰性热加载**: 不需要后台 goroutine。缓存 TTL 过期时，下次访问该镜像才 HEAD registry 检查 artifact-digest 是否变化。减少不必要的 registry 请求。
+3. **热加载（可选）**: 首次实现可以只支持手动更新（删除旧 ICQ，让 webhook 重新创建）。后续可以添加后台定期检查 ICQ 的 artifact-digest 是否变化来实现自动热加载。
 
 4. **Image digest 不可变性**: Webhook 将 image tag 解析为 digest 写入 Pod annotation，保证调度时使用的 digest 与创建时一致（参考 Kyverno 的 tag→digest mutation）。
 

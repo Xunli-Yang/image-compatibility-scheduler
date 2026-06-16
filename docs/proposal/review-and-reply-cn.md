@@ -84,7 +84,7 @@ nfd-master 更新 pre-group 时:
 
 > 调度器热路径中的 Registry I/O 会触发速率限制，并忽略 Pod 的 imagePullSecrets。预调度控制器或 admission webhook 按 image digest 解析兼容性更符合云原生模式——参见 sigstore policy-controller 和 Kyverno verify-images。
 
-**已解决 — Mutating Webhook + 内存 LRU 缓存。**
+**已解决 — Mutating Webhook + ICQ CR 持久化。**
 
 我们采用了 Mutating Webhook 设计，紧密遵循 sigstore policy-controller 和 Kyverno verify-images 的模式：
 
@@ -92,20 +92,20 @@ nfd-master 更新 pre-group 时:
 Pod CREATE → apiserver → Mutating Webhook
   1. 提取容器镜像引用
   2. 对每个镜像：
-     - 检查内存 LRU 缓存（以 image digest 为键）
-     - 命中（TTL 有效）→ 使用缓存的兼容性规则
-     - 命中（TTL 过期）→ HEAD registry，检查 artifact-digest 是否变化
-     - 未命中 → 拉取 OCI Artifact，解析，填充缓存
-  3. 创建 ImageCompatibilityQuery CR（spec 已填充）
-  4. 写入 Pod annotation：nfd.k8s-sigs.io/image-digests
-  5. 放行 Pod
+     - 解析 image → digest
+     - 查 K8s API: ICQ `icq-{digest}` 是否存在?
+     - 存在 → 直接复用，不需要创建
+     - 不存在 → 拉取 OCI Artifact，解析，创建 ICQ CR
+  3. 写入 Pod annotation：nfd.k8s-sigs.io/image-digests
+  4. 放行 Pod
 ```
 
 **关键特性：**
 - **调度器热路径无 registry I/O**：Webhook 处理所有 registry 交互。
 - **imagePullSecrets**：从 Pod namespace 解析（类似 Kyverno）或从 webhook 配置解析（类似 sigstore 的 `SignaturePullSecrets`）。
-- **缓存**：进程内 LRU，可配置 TTL。1000 副本的 Deployment 只触发 1 次 registry 拉取；其余 999 次命中缓存。
-- **热加载**：缓存 TTL 过期时惰性检查——HEAD registry 检测 artifact-digest 变化。无需后台 goroutine。
+- **ICQ CR 即持久化缓存**：无需内存 LRU 缓存，ICQ CR 持久化在 etcd 中，所有后续请求通过 API server 直接查到。1000 副本的 Deployment 只有第 1 个 Pod 触发 registry 拉取；其余 999 个直接查到已存在的 ICQ。
+- **多副本友好**：多个 webhook 副本共享同一个 etcd 中的 ICQ，无需同步缓存状态。
+- **热加载**：可选功能，可以通过后台定期检查 ICQ 的 artifact-digest 是否变化来实现，或手动删除旧 ICQ 让 webhook 重新创建。
 
 **Webhook 故障降级**：如果 webhook 宕机（`failurePolicy: Ignore`），Pod 在没有 ICQ 的情况下创建。调度器插件检测到缺失的 ICQ，降级为同步 OCI 解析 + ICQ 创建：
 
@@ -133,7 +133,7 @@ Pod CREATE → apiserver → Mutating Webhook
 | 语义 | 节点分组（管理员定义） | 兼容性查询（系统自动生成） |
 | 生命周期 | 长期存在，管理员手动管理 | 临时存在，自动 GC |
 | 创建者 | 集群管理员 | Webhook / Scheduler |
-| 更新者 | nfd-master | nfd-master（响应式更新 status） |
+| 更新者 | nfd-master (status.nodes) | Scheduler Plugin (status.compatibleNodes) |
 | RBAC | 管理员权限 | 系统组件权限 |
 | Spec 结构 | featureGroupRules（分组规则） | compatibilityRules（兼容性规则，内含 matchFeatures 复用 matcher 库） |
 | Status 字段 | status.nodes | status.compatibleNodes |
