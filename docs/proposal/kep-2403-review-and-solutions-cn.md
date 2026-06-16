@@ -1038,21 +1038,21 @@ nfd-master 天然知道所有节点和所有已分组节点，**未分组节点 
 
 #### Warm Cache (ICQ 已存在，informer 已预热)
 
-| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
-|---------|---------------|------------|-------------------------|-------------------------------|
-| 1k 节点 | < 20ms | < 20ms | < 500ms | < 120s |
-| 5k 节点 | < 50ms | < 50ms | < 1s | < 240s |
-| 10k 节点 | < 100ms | < 100ms | < 2s | < 480s |
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
+| :--- | :--- | :--- | :--- | :--- |
+| **1k** | < 50ms | < 20ms | < 200ms | < 60s |
+| **5k** | < 100ms | < 50ms | < 500ms | < 120s |
+| **10k** | < 200ms | < 100ms | < 1s | < 180s |
 
 #### Cold Cache (首次调度新镜像)
 
 冷路径延迟由三部分组成：registry I/O + ICQ CR 创建 + status 计算。由于使用 requeue 机制，Prefilter Latency 不包含等待时间，因此用 **Pod-Arrival-to-Bind** 衡量冷路径端到端延迟。
 
-| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
-|---------|---------------|------------|-------------------------|-------------------------------|
-| 1k 节点 | < 500ms | < 20ms | < 1s | < 180s |
-| 5k 节点 | < 1s | < 50ms | < 2s | < 360s |
-| 10k 节点 | < 2s | < 100ms | < 4s | < 600s |
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 
+| :--- | :--- | :--- | :--- |
+| **1k** | < 500ms | < 20ms | < 1s |
+| **5k** | < 1s | < 50ms | < 2s |
+| **10k** | < 2s | < 100ms | < 4s |
 
 **冷路径指标说明:**
 - **Pod-Arrival-to-Bind**: 包含 requeue 等待时间，是用户实际感知的延迟

@@ -274,19 +274,19 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 - **Performance Tests:** Measure scheduling latency and ICQ update overhead under simulated heavy loads using Kwok (at 1k, 5k, and 10k nodes).
     - **Performance Test Baseline (Warm Cache — ICQ exists, informer warmed):**
 
-| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | Success Rate (50 pods/s, 5s deadline) |
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
 | :--- | :--- | :--- | :--- | :--- |
-| **1k** | < 2ms | < 2ms | < 50ms | 100% |
-| **5k** | < 5ms | < 5ms | < 100ms | 100% |
-| **10k** | < 10ms | < 10ms | < 200ms | 99.9% |
+| **1k** | < 50ms | < 20ms | < 200ms | < 60s |
+| **5k** | < 100ms | < 50ms | < 500ms | < 120s |
+| **10k** | < 200ms | < 100ms | < 1s | < 180s |
 
     - **Performance Test Baseline (Cold Cache — first scheduling of new image):**
 
-| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | Success Rate (50 pods/s, 5s deadline) |
-| :--- | :--- | :--- | :--- | :--- |
-| **1k** | < 50ms | < 5ms | < 300ms | 100% |
-| **5k** | < 100ms | < 5ms | < 500ms | 100% |
-| **10k** | < 200ms | < 10ms | < 800ms | 99.9% | 
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 
+| :--- | :--- | :--- | :--- |
+| **1k** | < 500ms | < 20ms | < 1s |
+| **5k** | < 1s | < 50ms | < 2s |
+| **10k** | < 2s | < 100ms | < 4s |
 
 ### Graduation Criteria
 

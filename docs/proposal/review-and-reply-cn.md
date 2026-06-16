@@ -302,72 +302,23 @@ ICQ status 计算自动包含未分组节点：
 我们修订了性能目标，明确了缓存假设：
 
 **指标定义：**
-- **Prefilter Latency**：Prefilter 阶段执行时间（不含 requeue 等待）。包含 feature 匹配计算、ICQ status 更新。
-- **Filter Latency**：Filter 阶段执行时间。包含 nodeSelector/affinity 适配。
-- **Pod-Arrival-to-Bind**：从 Pod 进入调度队列到绑定的端到端延迟。**用户可观测指标。** 包含完整调度周期和排队时间。
-- **1000 Pods Scheduling Duration**：并发调度 1000 个 Pod 的总时长。衡量批量调度性能，scheduler 异步并发处理。
-
+- **Prefilter Latency**：仅 Prefilter 阶段的时间。不包括 requeue 等待。
+- **Filter Latency**：仅 Filter 阶段的时间。
+- **Pod-Arrival-to-Bind**：从 Pod 进入调度队列到绑定的端到端延迟。**用户可观测指标。**
+- **1000 Pods Scheduling Duration**：调度 1000 个 Pod 的 P99 延迟。
+- **成功率定义**：至少 99% 的 Pod 在该时间内完成调度（Bind）。
 **热缓存（ICQ 已存在，informer 已预热）：**
 
-| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
-|---------|---------------|------------|-------------------------|-------------------------------|
-| 1k | < 20ms | < 20ms | < 500ms | < 120s |
-| 5k | < 50ms | < 50ms | < 1s | < 240s |
-| 10k | < 100ms | < 100ms | < 2s | < 480s |
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
+| :--- | :--- | :--- | :--- | :--- |
+| **1k** | < 50ms | < 20ms | < 200ms | < 60s |
+| **5k** | < 100ms | < 50ms | < 500ms | < 120s |
+| **10k** | < 200ms | < 100ms | < 1s | < 180s |
 
 **冷缓存（首次调度新镜像）：**
 
-| 集群规模 | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
-|---------|---------------|------------|-------------------------|-------------------------------|
-| 1k | < 500ms | < 20ms | < 1s | < 180s |
-| 5k | < 1s | < 50ms | < 2s | < 360s |
-| 10k | < 2s | < 100ms | < 4s | < 600s |
-
-**关键洞察：** 冷路径只影响每个 image digest 的第一个 Pod。后续使用相同镜像的 Pod 走热路径。在典型工作负载中，初始部署后冷路径事件很少见。
-
----
-
-## 9. Affinity/NodeSelector 适配
-
-> 当工作负载供应商设置了 affinity/nodeSelector 时，NFD scheduler 如何行为？兼容性过滤与现有的节点选择机制如何协同工作？
-
-**已解决 — 兼容性过滤与 affinity/nodeSelector 取交集，向后兼容。**
-
-兼容性调度插件与现有的 node affinity 和 node selector 机制协同工作。兼容性过滤在 Filter 阶段执行，产生 compatibleNodes 集合。然后原生 K8s 调度器插件应用 affinity/nodeSelector 规则。最终节点必须同时满足两个约束（取交集）。
-
-**工作流程：**
-
-```
-Filter 阶段:
-  1. 兼容性插件执行兼容性过滤:
-     compatibleNodes = ∩ (所有镜像 ICQ 的 status.compatibleNodes)
-     例如: compatibleNodes = [node-1..node-500]
-
-  2. 原生 K8s 插件执行 affinity/nodeSelector 过滤:
-     affinityNodes = [node-300..node-800]  (由 Pod spec 中的 affinity 规则决定)
-
-  3. 取交集:
-     finalCandidates = compatibleNodes ∩ affinityNodes
-                     = [node-300..node-500]
-
-  4. 返回 finalCandidates 给调度框架
-```
-
-**示例场景：**
-
-| 场景 | 兼容性过滤结果 | Affinity 结果 | 最终候选节点 |
-|------|--------------|--------------|-------------|
-| 无 affinity | [1..500] | 全部节点 | [1..500] |
-| 有 affinity | [1..500] | [300..800] | [300..500] |
-| 无兼容节点 | [] | [300..800] | [] (调度失败) |
-| 无交集 | [1..100] | [300..800] | [] (调度失败) |
-
-**设计要点：**
-
-1. **向后兼容**: 现有的使用 affinity/nodeSelector 的 Pod spec 无需修改，兼容性过滤作为额外的约束叠加。
-
-2. **执行顺序**: 兼容性过滤在 Filter 阶段执行，与 affinity/nodeSelector 过滤并行，最终取交集。
-
-3. **语义清晰**: 节点必须同时满足兼容性要求和 affinity/nodeSelector 约束，两者是 AND 关系。
-
-4. **无冲突**: 兼容性插件不修改 affinity/nodeSelector 的行为，只是在候选节点集合上增加额外的过滤条件。
+| Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 
+| :--- | :--- | :--- | :--- |
+| **1k** | < 500ms | < 20ms | < 1s |
+| **5k** | < 1s | < 50ms | < 2s |
+| **10k** | < 2s | < 100ms | < 4s |
