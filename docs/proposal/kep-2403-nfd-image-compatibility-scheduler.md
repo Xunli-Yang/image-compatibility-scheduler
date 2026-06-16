@@ -75,7 +75,7 @@ If `NodeFeatureGroup` status updates are delayed, it can lead to stale informati
 The core of this proposal is to implement an `ImageCompatibilityPlugin` within the Kubernetes scheduler framework, working with a new `ImageCompatibilityQuery` (ICQ) CRD and existing `NodeFeatureGroup` (NFG) CRD.
 
 **Component Responsibilities:**
-- **Mutating Webhook**: Parses OCI artifacts during Pod admission, creates ICQ CRs with `spec.compatibilityRules` only (no status computation).
+- **Mutating Webhook**: Parses OCI artifacts during Pod admission. Checks if ICQ already exists (by image digest); if not, fetches OCI artifact and creates ICQ CR with `spec.compatibilityRules` only (no status computation). The ICQ CR itself serves as persistent cache.
 - **Scheduler Plugin**: Computes and updates `status.compatibleNodes` for ICQs, performs PreBind validation, and detects post-scheduling drift.
 - **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only. Does not manage ICQ status.
 
@@ -123,9 +123,11 @@ The process involves these main phases:
 
 1. **Initial Cluster Grouping:** In the cluster preparation stage, administrator should divide the cluster nodes into several groups by `NodeFeatureGroup`. Multiple `NodeFeatureGroup` CRs are created declaratively, each defining a grouping rule. Their status is populated with all matching nodes by nfd-master, completing the pre-grouping setup.
 2. **Pod Admission (Webhook):** During Pod creation, the mutating webhook:
-   - Fetches the OCI Artifact for each container image.
-   - Extracts compatibility metadata.
-   - Creates `ImageCompatibilityQuery` CRs with `spec.compatibilityRules` populated (status is not computed by webhook).
+   - Extracts image references from all containers.
+   - For each image, parses it to get the digest and checks if ICQ `icq-{digest}` already exists.
+   - If ICQ exists → reuses it (no creation needed).
+   - If ICQ does not exist → fetches the OCI Artifact, extracts compatibility metadata, and creates the ICQ CR with `spec.compatibilityRules` populated.
+   - The ICQ CR itself serves as persistent cache (stored in etcd), eliminating the need for in-memory caching.
    - Annotates the Pod with image digests: `nfd.k8s-sigs.io/image-digests: "sha256:aaa,sha256:bbb"`.
 3. **Scheduling Prefilter Phase:** The scheduler plugin:
    - Reads Pod annotations to get image digests.
@@ -138,19 +140,25 @@ The process involves these main phases:
 4. **Scheduling Filter Phase:** The scheduler filters candidate nodes by checking their presence in the `status.compatibleNodes` of all relevant ICQs (intersection for multi-image Pods).
 5. **Scheduling PreBind Phase:** A final validation step that re-verifies node compatibility using the latest node features from informer cache. This catches any race conditions where ICQ status might be stale due to delayed informer updates. If validation fails, the binding is rejected and the pod is rescheduled.
 
-**Multi-Image Pod Handling:**
-
-For Pods with multiple containers (app + init + sidecars), each image gets its own ICQ. The scheduler computes the intersection of all ICQs' `status.compatibleNodes` during the Filter phase. Images without compatibility metadata are skipped (no ICQ created).
-
 **Example Flow:** Assume 10000 nodes are pre-grouped into 10 groups (`Group-1` to `Group-10`) via `NodeFeatureGroup`. For a pod with a new compatibility demand, the webhook creates `ImageCompatibilityQuery-Compat-X` with spec only. The scheduler plugin evaluates the pre-groups using representative node matching. If `Group-1`'s representative node matches, all nodes from `Group-1` are added to `status.compatibleNodes`. This approach reduces the number of compatibility evaluations from **10,000 individual node checks** to **at most 10 representative node checks**.
 
 **Key Characteristics:**
 
-- **Administrator-Driven Grouping:** Node groups are statically predefined by the cluster administrator using `NodeFeatureGroup` in cluster preparation phase.
-- **Representative Node Matching:** The core performance optimization is achieved by evaluating only a **single representative node** from each pre-existing group against the ICQ's compatibility rules, rather than scanning all nodes.
-- **Scheduler Plugin Manages ICQ:** The scheduler plugin computes and updates `status.compatibleNodes` for ICQs, ensuring tight integration with the scheduling lifecycle.
-- **PreBind Validation:** The PreBind phase provides real-time validation using the latest node features, catching race conditions where ICQ status might be stale.
-- **ICQ Lifecycle Management:** ICQs are named by image digest prefix, enabling deduplication (1000 replicas of the same image → 1 ICQ). Reference counting and TTL-based GC manage lifecycle.
+1. **Administrator-Driven Grouping:** Node groups are statically predefined by the cluster administrator using `NodeFeatureGroup` in cluster preparation phase. This approach aligns with common large-scale cluster management practices where operators organize nodes into pools based on hardware characteristics.
+
+2. **Representative Node Matching:** The core performance optimization is achieved by evaluating only a **single representative node** from each pre-existing group against the ICQ's compatibility rules, rather than scanning all nodes. This reduces complexity from O(N) to O(G) where G is the number of groups (typically 10-50) and N is the total number of nodes.
+
+3. **Scheduler Plugin Manages ICQ Status:** The scheduler plugin computes and updates `status.compatibleNodes` for ICQs, ensuring tight integration with the scheduling lifecycle. The plugin uses NodeFeature informers to detect node feature changes and automatically recomputes ICQ status when nodes drift.
+
+4. **PreBind Validation:** The PreBind phase provides real-time validation using the latest node features from informer cache. This catches race conditions where ICQ status might be stale due to delayed informer updates. If validation fails (e.g., node drifted between Prefilter and PreBind), the binding is rejected and the pod is rescheduled to a compatible node.
+
+5. **Multi-Image Pod Handling:** For Pods with multiple containers (app + init + sidecars), each image gets its own ICQ. The scheduler computes the intersection of all ICQs' `status.compatibleNodes` during the Filter phase. For example, if Pod has image-A (compatible with nodes 1-500) and image-B (compatible with nodes 1-800), the final compatible nodes are nodes 1-500 (intersection). Images without compatibility metadata are skipped (no ICQ created), meaning they impose no compatibility constraints.
+
+6. **ICQ Lifecycle Management:** ICQs are named by image digest prefix (`icq-sha256-{prefix}`), enabling automatic deduplication. For example, 1000 replicas of the same image result in only 1 ICQ CR. The ICQ CR itself serves as persistent cache stored in etcd, eliminating the need for in-memory caching. Reference counting (via annotation) and TTL-based GC manage lifecycle, ensuring ICQs are cleaned up when no longer referenced.
+
+7. **Simplified Webhook Design:** The webhook does not maintain an in-memory LRU cache. Instead, the ICQ CR itself serves as persistent cache. When a Pod is created, the webhook checks if ICQ `icq-{digest}` already exists via K8s API. If ICQ exists, it reuses it (no registry fetch needed). If ICQ does not exist, it fetches the OCI artifact, parses it, and creates the ICQ CR. This design eliminates the need for cache synchronization across webhook replicas, simplifies the webhook code, and ensures cache persistence across webhook restarts. For a Deployment with 1000 replicas of the same image, only the first Pod triggers a registry fetch; the remaining 999 Pods reuse the existing ICQ CR.
+
+8. **Affinity/NodeSelector Compatibility:** The compatibility scheduling plugin works alongside existing node affinity and node selector mechanisms. The compatibility filtering happens in the Filter phase, producing a set of compatible nodes. This set is then intersected with nodes selected by affinity/nodeSelector rules (handled by native Kubernetes scheduler plugins). The result is that a node must satisfy both compatibility requirements AND affinity/nodeSelector constraints. For example, if compatibility filtering selects nodes 1-500, and node affinity selects nodes 300-800, the final candidate nodes are 300-500 (intersection). This ensures backward compatibility with existing Pod specs that use affinity/nodeSelector.
 
 **Exception Handling:**
 - If the OCI Artifact is unreachable or lacks compatibility metadata, the webhook skips ICQ creation for that image, and the plugin defaults to allowing scheduling on any node for that image. A warning is logged for visibility.
@@ -162,6 +170,7 @@ For Pods with multiple containers (app + init + sidecars), each image gets its o
 
 - **Significant Reduction in Computational Cost:** Shifts the complexity in the scheduling critical path from `O(N)` to `O(G)` (G is the group number, G<<N), delivering orders-of-magnitude performance improvement.
 - **Aligns with Common Large Scale Cluster Practice:** Node grouping is common in large scale cluster, where administrators define multiple `NodeFeatureGroup` resources and assign nodes to these groups in advance.
+- **Backward Compatible:** Works seamlessly with existing node affinity and node selector mechanisms, allowing users to combine compatibility requirements with other scheduling constraints.
 
 **Limitations**
 
@@ -214,6 +223,7 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
   - Add PreBind validation for real-time drift detection
   - Add post-scheduling drift detection with label + log + event alerting
   - Remove explicit `Homogeneous` field; use internal homogeneity detection
+  - Remove webhook in-memory LRU cache; ICQ CR itself serves as persistent cache
 ## Alternatives Considered
 
 ### Use Node Affinity/Node Selector Directly in Pod Spec

@@ -272,7 +272,14 @@
 │   │  │   2. Filter candidate nodes:                                      │  │ │
 │   │  │      filteredNodes = candidateNodes ∩ compatibleNodes             │  │ │
 │   │  │                                                                   │  │ │
-│   │  │   3. Return filtered nodes to scheduler framework                 │  │ │
+│   │  │   3. Affinity/NodeSelector compatibility:                         │  │ │
+│   │  │      - Compatibility filtering produces compatibleNodes set       │  │ │
+│   │  │      - Native K8s plugins then apply affinity/nodeSelector rules  │  │ │
+│   │  │      - Final nodes must satisfy BOTH constraints (intersection)   │  │ │
+│   │  │      - Example: compatibility=[1..500], affinity=[300..800]       │  │ │
+│   │  │                → final candidates = [300..500]                    │  │ │
+│   │  │                                                                   │  │ │
+│   │  │   4. Return filtered nodes to scheduler framework                 │  │ │
 │   │  └──────────────────────────────────────────────────────────────────┘  │ │
 │   │                              │                                         │ │
 │   │                              ▼                                         │ │
@@ -826,6 +833,14 @@ kubectl label pod pod-A -n production nfd.k8s-sigs.io/compatibility-drift-
 │     ├─ Webhook 故障 → Scheduler 同步解析 + 创建 ICQ                          │
 │     ├─ Registry 不可达 → failurePolicy: Ignore/Fail                          │
 │     └─ 理由: 保证功能可用性，代价是首次延迟增加                               │
+│                                                                               │
+│  8. Affinity/NodeSelector 兼容性                                              │
+│     ├─ 兼容性过滤在 Filter 阶段执行，产生 compatibleNodes 集合               │
+│     ├─ 原生 K8s 调度器插件随后应用 affinity/nodeSelector 规则                │
+│     ├─ 最终节点必须同时满足两个约束 (取交集)                                 │
+│     ├─ 示例: compatibility=[1..500], affinity=[300..800]                     │
+│     │        → final candidates = [300..500]                                 │
+│     └─ 理由: 与现有 Pod spec 向后兼容，允许用户组合兼容性需求和其他调度约束  │
 │                                                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
