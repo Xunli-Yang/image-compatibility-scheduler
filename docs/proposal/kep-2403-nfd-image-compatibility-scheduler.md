@@ -192,16 +192,10 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - For a Deployment with 1000 replicas of the same image, only the first Pod triggers a registry fetch; the remaining 999 Pods reuse the existing ICQ CR.
 
 3. **Failure Policy for Compatibility Resolution (Scheduling Phase):**
-   - **Webhook Role:** When the webhook fails to fetch or parse the OCI artifact (e.g., registry unreachable, artifact not found), it creates an ICQ CR with `status.conditions[Ready]=False` and records the error message. The webhook does not reject the Pod creation request.
-   - **Scheduler Plugin Role:** During the Prefilter phase, the scheduler plugin checks the ICQ status and executes the failure policy based on the following priority:
-     1. **Per-Pod Override:** If the Pod has the annotation `nfd.k8s-sigs.io/compatibility-policy: Fail`, the scheduler plugin uses this policy regardless of the cluster-level default.
-     2. **Cluster-Level Default:** Otherwise, the scheduler plugin uses the `defaultCompatibilityFailurePolicy` configured in the scheduler plugin configuration.
-   - **Ignore (Fail-open, default):** If ICQ status is not ready, the scheduler plugin skips compatibility checking for that image and allows scheduling on any node. A warning event is generated for visibility. Suitable for development or general-purpose clusters.
-   - **Fail (Fail-closed):** If ICQ status is not ready, the scheduler plugin marks the Pod as Unschedulable (Pending) with a clear message (e.g., "compatibility metadata unavailable, waiting for registry recovery"). The scheduler plugin periodically retries resolving the ICQ status. When the registry recovers and the ICQ becomes ready, the Pod is automatically scheduled. Suitable for production or high-security clusters.
-   - **Two-Level Policy Configuration:**
-     - Cluster-level default is configured via scheduler plugin ConfigMap: `defaultCompatibilityFailurePolicy: Ignore` (or `Fail`).
-     - Per-pod override is configured via Pod annotation: `nfd.k8s-sigs.io/compatibility-policy: Fail` (or `Ignore`).
-     - This design ensures flexibility: most workloads use the cluster default, while critical workloads can enforce strict compatibility checking.
+   - When the webhook fails to fetch the OCI artifact, it creates an ICQ with `status.conditions[Ready]=False`. The scheduler plugin executes the failure policy during Prefilter:
+   - **Ignore (Fail-open, default):** Skips compatibility check, allows scheduling on any node. Suitable for development clusters.
+   - **Fail (Fail-closed):** Marks Pod as Unschedulable, retries when registry recovers. Suitable for production clusters.
+   - **Two-level policy:** Cluster-level default via scheduler config, per-pod override via annotation `nfd.k8s-sigs.io/compatibility-policy`.
 
 4. **ICQ Lifecycle Management (Persistent Cache):**
    - ICQs are named by image digest prefix (`icq-sha256-{prefix}`), enabling automatic deduplication.
