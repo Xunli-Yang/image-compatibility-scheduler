@@ -31,13 +31,14 @@ nfd-master 更新 pre-group 时:
   3. 更新 pre-group 的 status.nodes
 ```
 
-**调度后漂移检测由 nfd-master 负责**，不引入插件侧开销：
+**调度后漂移检测由 Scheduler Plugin 负责**，因为 plugin 管理 ICQ 的完整生命周期：
 
-| 维度 | nfd-master | Scheduler Plugin |
-|------|-----------|-----------------|
-| 数据权威性 | 所有 NodeFeature 的权威来源 | 通过 informer 缓存获取，可能有延迟 |
-| 职责边界 | 负责维护所有 NFG 和 ICQ 的 status | 只负责调度决策 |
-| 性能影响 | 后台异步计算，不影响调度延迟 | 在调度热路径上，增加开销会影响 p99 |
+| 维度 | Scheduler Plugin | nfd-master |
+|------|-----------------|-----------|
+| 职责边界 | 管理 ICQ 的完整生命周期 | 只负责 NodeFeatureGroup 的 status 更新 |
+| 数据访问 | 通过 NodeFeature informer 获取最新数据 | 所有 NodeFeature 的权威来源 |
+| 性能影响 | 监听 NodeFeature 变化是已有机制 | 增加额外负担，职责不清 |
+| 一致性 | 漂移检测与 ICQ 更新在同一组件 | 跨组件协调复杂 |
 
 **漂移检测流程**：
 
