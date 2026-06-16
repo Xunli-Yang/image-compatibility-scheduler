@@ -276,21 +276,17 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 
 | Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | Success Rate (50 pods/s, 5s deadline) |
 | :--- | :--- | :--- | :--- | :--- |
-| **1k** | < 5ms | < 5ms | < 50ms | 100% |
-| **5k** | < 10ms | < 10ms | < 100ms | 100% |
-| **10k** | < 20ms | < 20ms | < 200ms | 99.9% |
+| **1k** | < 2ms | < 2ms | < 50ms | 100% |
+| **5k** | < 5ms | < 5ms | < 100ms | 100% |
+| **10k** | < 10ms | < 10ms | < 200ms | 99.9% |
 
     - **Performance Test Baseline (Cold Cache — first scheduling of new image):**
 
-| Scenario | P99 Pod-Arrival-to-Bind | Latency Breakdown |
+| Cluster Size (Nodes) | P99 Pod-Arrival-to-Bind | Latency Breakdown |
 | :--- | :--- | :--- |
-| Webhook normal, 1k | < 300ms | registry RTT (~50-100ms) + OCI parse (~10-20ms) + ICQ create (~20ms) + status compute (~50-100ms) + requeue (~50ms) |
-| Webhook normal, 5k | < 500ms | status compute increases with node count |
-| Webhook normal, 10k | < 800ms | includes residual set per-node matching |
-| Webhook failure, scheduler fallback, 1k | < 1.5s | synchronous OCI fetch in scheduler |
-| Webhook failure, scheduler fallback, 5k | < 2s | |
-| Webhook failure, scheduler fallback, 10k | < 3s | |
-| Subsequent pods (same image) | Same as warm cache | ICQ reused, zero additional latency | 
+| **1k** | < 300ms | registry RTT (~50-100ms) + OCI parse (~10-20ms) + ICQ create (~20ms) + status compute (~50-100ms) + requeue (~50ms) |
+| **5k** | < 500ms | status compute increases with node count |
+| **10k** | < 800ms | includes residual set per-node matching | 
 
 ### Graduation Criteria
 
