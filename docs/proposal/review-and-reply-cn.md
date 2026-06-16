@@ -42,7 +42,7 @@ nfd-master 更新 pre-group 时:
 **漂移检测流程**：
 
 ```
-nfd-master 重算 ImageCompatibilityQuery 的 status.compatibleNodes 时:
+Scheduler plugin 监听到 NodeFeature 变化，重算 ImageCompatibilityQuery 的 status.compatibleNodes 时:
   1. 计算新的 status.compatibleNodes（基于当前 NodeFeature，利用 pre-group 加速）
   2. 对比旧的 status.compatibleNodes:
      removedNodes = old.status.compatibleNodes - new.status.compatibleNodes
@@ -90,10 +90,10 @@ Pod CREATE → apiserver → Mutating Webhook
 **Webhook 故障降级**：如果 webhook 宕机（`failurePolicy: Ignore`），Pod 在没有 ICQ 的情况下创建。调度器插件检测到缺失的 ICQ，降级为同步 OCI 解析 + ICQ 创建：
 
 ```
-正常路径：Pod CREATE → Webhook 解析 → ICQ 创建 → 调度器读取 ICQ status
+正常路径：Pod CREATE → Webhook 解析 → ICQ spec 创建 → Scheduler plugin 计算 status → 调度器读取 ICQ status
 降级路径：Webhook 宕机 → Pod 创建（无 ICQ）→ 调度器检测到缺失 ICQ
-         → 调度器执行同步 OCI 解析 → 创建 ICQ
-         → 等待 nfd-master status 计算 → 继续调度流程
+         → 调度器执行同步 OCI 解析 → 创建 ICQ spec
+         → Scheduler plugin 计算 status → 继续调度流程
 ```
 
 这保证了即使 webhook 不可用时的功能可用性，代价是首次调度延迟增加。
@@ -115,7 +115,7 @@ Pod CREATE → apiserver → Mutating Webhook
 | 创建者 | 集群管理员 | Webhook / Scheduler |
 | 更新者 | nfd-master | nfd-master（响应式更新 status） |
 | RBAC | 管理员权限 | 系统组件权限 |
-| Spec 结构 | featureGroupRules（分组规则） | matchFeatures（兼容性规则） |
+| Spec 结构 | featureGroupRules（分组规则） | compatibilityRules（兼容性规则，内含 matchFeatures 复用 matcher 库） |
 | Status 字段 | status.nodes | status.compatibleNodes |
 
 **理由：**
@@ -139,11 +139,11 @@ Pod CREATE → apiserver → Mutating Webhook
 
 **问题 1：Prefilter 如何等待？**
 
-在 webhook 设计下，Prefilter 在大多数情况下**不需要**等待 nfd-master：
+在 webhook 设计下，Prefilter 在大多数情况下**不需要**等待：
 
-- **热路径（绝大多数情况）**：Webhook 已经创建了 ICQ，nfd-master 已经填充了 `status.compatibleNodes`。调度器直接从 informer 缓存读取 `status.compatibleNodes`。零等待。
-- **冷路径（首次调度新镜像）**：Webhook 在 Pod admission 期间创建 ICQ。当调度器处理 Pod 时（经过 apiserver admission 开销后），nfd-master 通常已经计算好了 `status.compatibleNodes`。如果没有，调度器使用 requeue 机制：标记 Pod 为 unschedulable，退避，并在 ICQ status Informer 触发时 `MovePodToActiveQueue`。
-- **降级路径（webhook 宕机）**：调度器自己创建 ICQ 并通过 requeue 等待。这是唯一需要速率限制 workqueue 的路径，且只影响每个新 image digest 的第一个 Pod。
+- **热路径（绝大多数情况）**：Webhook 已经创建了 ICQ spec，Scheduler plugin 已经计算了 `status.compatibleNodes`。调度器直接从 informer 缓存读取 `status.compatibleNodes`。零等待。
+- **冷路径（首次调度新镜像）**：Webhook 在 Pod admission 期间创建 ICQ spec。当调度器处理 Pod 时，Scheduler plugin 计算 `status.compatibleNodes`。如果 ICQ 不存在，调度器使用 requeue 机制：标记 Pod 为 unschedulable，退避，并在 ICQ status Informer 触发时 `MovePodToActiveQueue`。
+- **降级路径（webhook 宕机）**：调度器自己创建 ICQ spec 并计算 status。这是唯一需要额外计算的路径，且只影响每个新 image digest 的第一个 Pod。
 
 **问题 2：能否通过 spec hash 去重？**
 
@@ -173,31 +173,32 @@ P 和 I 相对于 N（节点数）都很小。
 
 > 步骤 2 读起来像是插件自己运行代表节点匹配并写入临时 ICQ status，而讨论中同意的 requeue 机制让插件等待 nfd-master 填充 status——这是两种不同的架构。文档能否确定一种，并说明评估器从哪里读取原始特征？插件侧评估意味着调度器内需要 NodeFeature informer 和 NFD 的 matcher 库；master 侧意味着 Goals 中的节点粒度 ICQ 更新 API 需要一个 spec 化的触发器（临时 ICQ 中的一个字段？）。
 
-**已解决 — Plugin + Master 协作。**
+**已解决 — ICQ 完全由 Scheduler Plugin 管理。**
 
-我们确定了一种混合架构，双方都可以计算 status，但有明确的职责边界：
+我们确定了清晰的职责边界：
 
-**首次创建（Plugin/调度器侧）：**
-- 调度器插件（或 webhook）创建 ImageCompatibilityQuery CR。
-- 插件在本地计算 `status.compatibleNodes`，使用：
+**ICQ 生命周期管理（Scheduler Plugin 侧）：**
+- Webhook 创建 ImageCompatibilityQuery CR（仅 spec）。
+- Scheduler plugin 计算并写入 `status.compatibleNodes`，使用：
   - **NodeFeature informer**（调度器中已存在，供其他插件使用）。
   - **NFD matcher 库**（共享代码，与 nfd-master 逻辑相同）。
-- 插件将计算好的 `status.compatibleNodes` 直接写入 ICQ CR。
-- 设置 `status.conditions[Ready] = True`。
+- Scheduler plugin 监听 NodeFeature 变化，主动重新计算 ICQ status。
+- Scheduler plugin 管理 refcount 和 GC。
 
-**后续更新（Master 侧）：**
-- nfd-master watch NodeFeature 变化。
-- 为受影响的 ICQ 重新计算 `status.compatibleNodes`。
-- 只处理 `status.conditions[Ready] = True` 的 ICQ（避免与插件的首次写入竞争）。
+**nfd-master 职责（仅 NodeFeatureGroup）：**
+- 收集节点特征，更新 NodeFeatureGroup 的 status.nodes。
+- 隐式检测 pre-group 内部一致性。
+- **不更新 ICQ status**。
 
-**为什么这样拆分：**
-- 插件侧首次写入消除了调度热路径上的异步等待链（API write → master watch → compute → status write → plugin watch）。
-- Master 侧后续更新利用 nfd-master 已有的节点变化响应循环。
-- 双方使用相同的 NFD matcher 库，确保结果一致。
+**为什么这样设计：**
+- ICQ 是调度相关资源，由调度组件管理，职责边界清晰。
+- Scheduler plugin 已有 NodeFeature informer，无需额外的跨组件通信。
+- 避免了 nfd-master 的额外负担，保持 nfd-master 专注于节点特征收集。
+- 漂移检测自然由 scheduler plugin 负责，因为它管理 ICQ 的完整生命周期。
 
 **原始特征来源：**
-- 插件从 NodeFeature informer 缓存读取（本地，无 API 调用）。
-- Master 从其内部 NodeFeature 存储读取（权威来源）。
+- Scheduler plugin 从 NodeFeature informer 缓存读取（本地，无 API 调用）。
+- nfd-master 从其内部 NodeFeature 存储读取（权威来源，用于更新 NodeFeatureGroup）。
 
 **写入者协调：**
 - `status.conditions[Ready]` 标记 ICQ 已准备好接受 master 侧更新。

@@ -14,8 +14,8 @@
 │  │  │  (Mutating) │         │                  │         │   Plugin     │  │   │
 │  │  └──────┬──────┘         └────────┬─────────┘         └──────┬───────┘  │   │
 │  │         │                         │                          │           │   │
-│  │         │ 1.Create ICQ            │ 3.Update status          │ 4.Read    │   │
-│  │         │                         │                          │  status   │   │
+│  │         │ 1.Create ICQ spec       │ 2.Update NFG status      │ 3.Compute │   │
+│  │         │                         │                          │  ICQ stat │   │
 │  │         ▼                         ▼                          ▼           │   │
 │  │  ┌──────────────────────────────────────────────────────────────────┐   │   │
 │  │  │                          etcd / API Server                        │   │   │
@@ -29,6 +29,8 @@
 │  │  │  │                     │              │                        │ │   │   │
 │  │  │  │ status:             │              │ status:                │ │   │   │
 │  │  │  │   nodes: [...]      │              │   compatibleNodes: [...]│ │   │   │
+│  │  │  │   (updated by       │              │   (computed by         │ │   │   │
+│  │  │  │    nfd-master)      │              │    scheduler plugin)   │ │   │   │
 │  │  │  └─────────────────────┘              └────────────────────────┘ │   │   │
 │  │  └──────────────────────────────────────────────────────────────────┘   │   │
 │  │                                                                          │   │
@@ -117,7 +119,7 @@
 │   │  │                                                                   │  │ │
 │   │  │   for each unique image digest:                                  │  │ │
 │   │  │     if ICQ not exists:                                           │  │ │
-│   │  │       create ICQ with spec.matchFeatures                         │  │ │
+│   │  │       create ICQ with spec.compatibilityRules                    │  │ │
 │   │  │       set refcount = 1                                           │  │ │
 │   │  │     else:                                                        │  │ │
 │   │  │       refcount++                                                 │  │ │
@@ -143,7 +145,7 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                    Phase 2: NFD 特征收集与 status 计算                        │
+│                    Phase 2: NFD 特征收集与 NodeFeatureGroup 更新             │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                                │
 │   ┌─────────────────────────────────────────────────────────────────────────┐ │
@@ -167,17 +169,34 @@
 │   │                            nfd-master                                    │ │
 │   │                                                                          │ │
 │   │  ┌──────────────────────────────────────────────────────────────────┐  │ │
-│   │  │ Task 1: Update NodeFeatureGroup (admin pre-group)                │  │ │
+│   │  │ Update NodeFeatureGroup (admin pre-group)                        │  │ │
 │   │  │                                                                   │  │ │
 │   │  │   for each pre-group:                                            │  │ │
 │   │  │     collect node features                                        │  │ │
 │   │  │     check homogeneity (internal, no exposed field)               │  │ │
 │   │  │     update status.nodes                                          │  │ │
+│   │  │                                                                   │  │ │
+│   │  │   Note: nfd-master does NOT update ICQ status                    │  │ │
 │   │  └──────────────────────────────────────────────────────────────────┘  │ │
-│   │                              │                                         │ │
-│   │                              ▼                                         │ │
+│   └─────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                                 │
+│                              │ Update NodeFeatureGroup status                 │
+│                              ▼                                                 │
+│   ┌─────────┐                                                                  │
+│   │ etcd    │ ← NodeFeatureGroup status.nodes updated                          │
+│   └─────────┘                                                                  │
+│                                                                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    Phase 3: Scheduler 计算 ICQ Status                        │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                                │
+│   ┌─────────────────────────────────────────────────────────────────────────┐ │
+│   │                         Scheduler Plugin                                 │ │
+│   │                                                                          │ │
 │   │  ┌──────────────────────────────────────────────────────────────────┐  │ │
-│   │  │ Task 2: Update ImageCompatibilityQuery                           │  │ │
+│   │  │ ICQ Status Computation (首次或节点变化时)                         │  │ │
 │   │  │                                                                   │  │ │
 │   │  │   for each ICQ:                                                  │  │ │
 │   │  │     ┌────────────────────────────────────────────────────────┐  │  │ │
@@ -186,7 +205,7 @@
 │   │  │     │ compatibleNodes = []                                     │  │  │ │
 │   │  │     │                                                          │  │  │ │
 │   │  │     │ // Use pre-group acceleration                           │  │  │ │
-│   │  │     │ for each pre-group:                                      │  │  │ │
+│   │  │     │ for each NodeFeatureGroup (pre-group):                  │  │  │ │
 │   │  │     │   if pre-group homogeneous (internal check):            │  │  │ │
 │   │  │     │     representative node match → O(1)                    │  │  │ │
 │   │  │     │     if match → add all nodes to compatibleNodes         │  │  │ │
@@ -199,12 +218,13 @@
 │   │  │     │   per-node match                                        │  │  │ │
 │   │  │     │                                                          │  │  │ │
 │   │  │     │ status.compatibleNodes = compatibleNodes                │  │  │ │
+│   │  │     │ status.conditions[Ready] = True                         │  │  │ │
 │   │  │     └────────────────────────────────────────────────────────┘  │  │ │
 │   │  └──────────────────────────────────────────────────────────────────┘  │ │
 │   │                              │                                         │ │
 │   │                              ▼                                         │ │
 │   │  ┌──────────────────────────────────────────────────────────────────┐  │ │
-│   │  │ Task 3: Detect Drift (optional)                                  │  │ │
+│   │  │ Drift Detection (节点变化时)                                      │  │ │
 │   │  │                                                                   │  │ │
 │   │  │   oldNodes = old status.compatibleNodes                          │  │ │
 │   │  │   newNodes = new status.compatibleNodes                          │  │ │
@@ -333,13 +353,15 @@
 │      nfd.k8s-sigs.io/refcount: "3"                                           │
 │      nfd.k8s-sigs.io/last-used: "2026-06-15T10:05:00Z"                      │
 │  spec:                                                                       │
-│    matchFeatures:                                                            │
-│      - feature: kernel.version                                               │
-│        matchExpressions:                                                     │
-│          major: {op: In, value: ["6"]}                                       │
-│      - feature: cpu.cpuid                                                    │
-│        matchExpressions:                                                     │
-│          AVX2: {op: Is, value: true}                                         │
+│    compatibilityRules:                                                       │
+│      - name: "image-compatibility"                                           │
+│        matchFeatures:                                                        │
+│          - feature: kernel.version                                           │
+│            matchExpressions:                                                 │
+│              major: {op: In, value: ["6"]}                                   │
+│          - feature: cpu.cpuid                                                │
+│            matchExpressions:                                                 │
+│              AVX2: {op: Is, value: true}                                     │
 │  status:                                                                     │
 │    compatibleNodes:                                                          │
 │      - name: node-1                                                          │
@@ -351,8 +373,8 @@
 │        lastTransitionTime: "2026-06-15T10:00:00Z"                           │
 │                                                                               │
 │  生命周期: 临时存在，自动 GC (refcount=0 + TTL)                               │
-│  创建者: Webhook / Scheduler (降级模式)                                       │
-│  更新者: nfd-master (status.compatibleNodes)                                  │
+│  创建者: Webhook (spec only)                                                   │
+│  更新者: Scheduler Plugin (status.compatibleNodes)                             │
 │                                                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -442,8 +464,10 @@
 │  T2: node-50 内核升级，特征漂移                                              │
 │      NFD worker 上报新特征                                                   │
 │                                                                               │
-│  T3: nfd-master 重算 ICQ status                                              │
+│  T3: Scheduler plugin 监听到 NodeFeature 变化，重算 ICQ status               │
 │      ┌────────────────────────────────────────────────────────────────┐     │
+│      │ // Watch NodeFeature changes via informer                      │     │
+│      │                                                                 │     │
 │      │ old.compatibleNodes = [node-1..node-100]                       │     │
 │      │ new.compatibleNodes = [node-1..node-49, node-51..node-100]    │     │
 │      │                                                                 │     │
@@ -486,34 +510,32 @@
 │  │ Mutating        │ • Intercept Pod CREATE                                │ │
 │  │ Webhook         │ • Fetch OCI Artifact (with LRU cache)                 │ │
 │  │                 │ • Parse compatibility metadata                        │ │
-│  │                 │ • Create ImageCompatibilityQuery CR                   │ │
+│  │                 │ • Create ImageCompatibilityQuery CR (spec only)       │ │
 │  │                 │ • Annotate Pod with image digests                     │ │
 │  │                 │ • Hot-reload (lazy check on TTL expiry)               │ │
 │  ├─────────────────┼──────────────────────────────────────────────────────┤ │
 │  │ nfd-master      │ • Collect NodeFeature from NFD workers                │ │
 │  │                 │ • Update NodeFeatureGroup status.nodes                │ │
-│  │                 │ • Update ImageCompatibilityQuery status               │ │
-│  │                 │   - Use pre-group acceleration                        │ │
-│  │                 │   - Internal homogeneity detection                    │ │
-│  │                 │   - Handle ungrouped nodes (residual set)             │ │
-│  │                 │ • Detect drift (compare old/new status)               │ │
-│  │                 │ • Generate NodeCompatibilityDrift events              │ │
-│  │                 │ • Apply postDriftPolicy                               │ │
+│  │                 │   (admin pre-group only, NOT ICQ)                     │ │
+│  │                 │ • Internal homogeneity detection for pre-groups       │ │
 │  ├─────────────────┼──────────────────────────────────────────────────────┤ │
 │  │ Scheduler       │ • Read Pod annotations (image digests)                │ │
 │  │ Plugin          │ • Query ICQ from informer cache                       │ │
 │  │                 │ • Prefilter:                                          │ │
 │  │                 │   - Check ICQ existence                               │ │
 │  │                 │   - Fallback: sync OCI fetch + ICQ creation           │ │
+│  │                 │   - Compute & write ICQ status.compatibleNodes        │ │
 │  │                 │   - Store compatibleNodes in SchedulingContext        │ │
 │  │                 │ • Filter:                                             │ │
 │  │                 │   - Compute intersection of all ICQ compatibleNodes   │ │
 │  │                 │   - Filter candidate nodes                            │ │
 │  │                 │ • Update ICQ refcount                                 │ │
-│  ├─────────────────┼──────────────────────────────────────────────────────┤ │
-│  │ GC Controller   │ • Monitor ICQ refcount                                │ │
-│  │ (optional)      │ • Delete ICQ when refcount=0 + TTL expired            │ │
-│  │                 │ • Safety net for abnormal Pod exits                   │ │
+│  │                 │ • Watch NodeFeature changes via informer              │ │
+│  │                 │   - Recompute ICQ status when nodes change            │ │
+│  │                 │   - Detect drift (compare old/new status)             │ │
+│  │                 │   - Generate NodeCompatibilityDrift events            │ │
+│  │                 │   - Apply postDriftPolicy                             │ │
+│  │                 │ • GC: Monitor refcount, delete ICQ when expired       │ │
 │  └─────────────────┴──────────────────────────────────────────────────────┘ │
 │                                                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -546,17 +568,19 @@
 │     ├─ Refcount 跟踪引用数                                                   │
 │     └─ 理由: 最大化复用，1000 副本 → 1 个 ICQ                                │
 │                                                                               │
-│  5. Plugin + Master 协作                                                      │
-│     ├─ Plugin 首次计算 status (消除异步等待)                                  │
-│     ├─ Master 后续响应式更新                                                  │
-│     ├─ status.conditions[Ready] 协调 writer                                  │
-│     └─ 理由: 首次无等待 + 后续自动更新                                        │
+│  5. Scheduler Plugin 管理 ICQ 生命周期                                        │
+│     ├─ Webhook 创建 ICQ spec (仅 spec)                                        │
+│     ├─ Scheduler plugin 计算并更新 status.compatibleNodes                     │
+│     ├─ Scheduler plugin 监听 NodeFeature 变化，主动重新计算 ICQ status        │
+│     ├─ Scheduler plugin 管理 refcount 和 GC                                   │
+│     └─ 理由: ICQ 是调度相关资源，由调度组件管理，职责边界清晰                   │
 │                                                                               │
-│  6. 漂移检测由 nfd-master 负责                                                │
+│  6. 漂移检测由 scheduler plugin 负责                                          │
+│     ├─ 监听 NodeFeature 变化，重新计算 ICQ status                             │
 │     ├─ 对比新旧 status.compatibleNodes                                        │
 │     ├─ 生成 NodeCompatibilityDrift Event                                     │
 │     ├─ 可配置 postDriftPolicy (ignore/taint/deschedule)                      │
-│     └─ 理由: nfd-master 是权威数据源，不影响调度热路径                        │
+│     └─ 理由: ICQ 由 scheduler plugin 管理，漂移检测自然由其负责               │
 │                                                                               │
 │  7. 降级机制                                                                  │
 │     ├─ Webhook 故障 → Scheduler 同步解析 + 创建 ICQ                          │
