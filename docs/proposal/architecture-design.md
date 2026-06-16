@@ -454,47 +454,288 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          漂移检测流程                                        │
+│                          漂移处理两层设计                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                               │
-│  T1: Pod 调度到 node-50 (当时兼容)                                           │
-│      ICQ.status.compatibleNodes = [node-1..node-100]                        │
-│      Pod running on node-50 ✓                                               │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ 场景 1: 调度前漂移 (Pod 还没调度)                                     │  │
+│  │                                                                        │  │
+│  │  第一层: ICQ status 异步更新 (覆盖 99% 场景)                          │  │
+│  │    节点漂移 → NodeFeature 更新 → informer 回调                        │  │
+│  │    → Scheduler Plugin 重算 ICQ status.compatibleNodes                 │  │
+│  │    → 漂移节点从 compatibleNodes 中移除                                │  │
+│  │    → 后续调度的 Pod 自动避开漂移节点 ✓                                │  │
+│  │                                                                        │  │
+│  │  第二层: PreBind 实时验证 (兜底 1% 竞态场景)                          │  │
+│  │    如果 informer 回调延迟，ICQ status 过时:                           │  │
+│  │    → PreBind 用节点最新特征做实时验证                                 │  │
+│  │    → 发现漂移 → 拒绝绑定 → 重新调度 ✓                               │  │
+│  │                                                                        │  │
+│  │  结果: 新 Pod 不会调度到漂移节点                                      │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
 │                                                                               │
-│  T2: node-50 内核升级，特征漂移                                              │
-│      NFD worker 上报新特征                                                   │
-│                                                                               │
-│  T3: Scheduler plugin 监听到 NodeFeature 变化，重算 ICQ status               │
-│      ┌────────────────────────────────────────────────────────────────┐     │
-│      │ // Watch NodeFeature changes via informer                      │     │
-│      │                                                                 │     │
-│      │ old.compatibleNodes = [node-1..node-100]                       │     │
-│      │ new.compatibleNodes = [node-1..node-49, node-51..node-100]    │     │
-│      │                                                                 │     │
-│      │ removedNodes = [node-50]                                        │     │
-│      │                                                                 │     │
-│      │ for node-50:                                                    │     │
-│      │   check running Pods                                            │     │
-│      │   found: my-pod using app@sha256:aaa                           │     │
-│      │                                                                 │     │
-│      │ generate Event:                                                 │     │
-│      │   kind: Pod                                                     │     │
-│      │   reason: NodeCompatibilityDrift                                │     │
-│      │   message: "Pod my-pod is running on node-50 which no longer   │     │
-│      │            satisfies compatibility requirements for image       │     │
-│      │            app@sha256:aaa"                                       │     │
-│      │                                                                 │     │
-│      │ apply postDriftPolicy:                                          │     │
-│      │   ignore (default) → no action                                  │     │
-│      │   taint → add taint to node-50                                  │     │
-│      │   deschedule → trigger descheduler                              │     │
-│      └────────────────────────────────────────────────────────────────┘     │
-│                                                                               │
-│  T4: ICQ status updated                                                      │
-│      Scheduler 下次调度时读到新的 compatibleNodes                             │
-│      node-50 不再被选为兼容节点                                               │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ 场景 2: 调度后漂移 (Pod 已在运行)                                     │  │
+│  │                                                                        │  │
+│  │  节点漂移 → NodeFeature 更新 → informer 回调                          │  │
+│  │  → Scheduler Plugin 重算 ICQ status.compatibleNodes                   │  │
+│  │  → 检测受影响的 Pod (运行在漂移节点上，且镜像匹配该 ICQ)              │  │
+│  │                                                                        │  │
+│  │  对每个受影响的 Pod:                                                  │  │
+│  │    1. 给 Pod 打 label:                                                │  │
+│  │       nfd.k8s-sigs.io/compatibility-drift: "true"                     │  │
+│  │       nfd.k8s-sigs.io/drift-node: "node-50"                           │  │
+│  │       nfd.k8s-sigs.io/drift-time: "2026-06-15T10:30:00Z"             │  │
+│  │                                                                        │  │
+│  │    2. 记录结构化日志:                                                 │  │
+│  │       {                                                                │  │
+│  │         "level": "warn",                                              │  │
+│  │         "event": "NodeCompatibilityDrift",                            │  │
+│  │         "pod": "my-app-abc123",                                       │  │
+│  │         "node": "node-50",                                            │  │
+│  │         "image": "registry.example.com/app@sha256:aaa...",            │  │
+│  │         "drifted_features": [...]                                     │  │
+│  │       }                                                                │  │
+│  │                                                                        │  │
+│  │    3. 生成 K8s Event (可选):                                          │  │
+│  │       type: Warning                                                   │  │
+│  │       reason: NodeCompatibilityDrift                                  │  │
+│  │       message: "Node drifted, pod running on incompatible node"       │  │
+│  │                                                                        │  │
+│  │  结果: 管理员通过 label/log/event 发现漂移，决定是否迁移              │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
 │                                                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 调度前漂移：两层防护
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  调度前漂移处理流程                                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  T1: node-50 内核升级，特征漂移                                              │
+│  T2: NFD worker 上报新特征                                                   │
+│  T3: nfd-master 更新 NodeFeature                                             │
+│                                                                               │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  第一层: ICQ status 异步更新 (覆盖 99% 场景)                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                               │
+│  T4: Scheduler Plugin informer 回调触发                                      │
+│  T5: 重算 ICQ status.compatibleNodes                                         │
+│      → node-50 从 compatibleNodes 中移除                                     │
+│                                                                               │
+│  T6: 新 Pod 进入调度队列                                                     │
+│  T7: Prefilter 读取 ICQ status                                               │
+│      → compatibleNodes = [node-1..node-49, node-51..node-100]               │
+│      → node-50 不在列表中 ✓                                                 │
+│  T8: Filter 过滤候选节点                                                     │
+│  T9: Score 选择最优节点                                                      │
+│  T10: PreBind 验证 (此时 ICQ status 已是最新)                                │
+│      → 验证通过 ✓                                                           │
+│  T11: Bind 绑定 Pod 到节点                                                   │
+│                                                                               │
+│  结果: Pod 调度到兼容节点 ✓                                                 │
+│                                                                               │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  第二层: PreBind 实时验证 (兜底 1% 竞态场景)                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                               │
+│  T4': 新 Pod 进入调度队列 (informer 回调还未触发)                            │
+│  T5': Prefilter 读取 ICQ status                                              │
+│      → compatibleNodes = [node-1..node-50..node-100] (过时)                 │
+│      → node-50 还在列表中 ✗                                                 │
+│  T6': Filter 过滤候选节点                                                    │
+│  T7': Score 选择最优节点 → node-50                                           │
+│                                                                               │
+│  T8': PreBind 实时验证 (关键!)                                               │
+│      → 从 informer 读取 node-50 的最新特征                                   │
+│      → 用最新特征 vs ICQ 兼容性规则做匹配                                    │
+│      → 匹配失败! node-50 已漂移                                              │
+│      → 拒绝绑定，返回 Unschedulable                                          │
+│      → 生成 Event: "Node drifted during scheduling"                         │
+│                                                                               │
+│  T9': 调度框架重新调度 Pod                                                   │
+│  T10': 下次调度时，informer 回调已触发，ICQ status 已更新                    │
+│      → Pod 调度到兼容节点 ✓                                                 │
+│                                                                               │
+│  结果: PreBind 拦截漂移节点，保证调度正确性 ✓                               │
+│                                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### PreBind 验证逻辑
+
+```go
+func (p *Plugin) PreBind(ctx context.Context, state *framework.CycleState, 
+                         pod *v1.Pod, nodeName string) *framework.Status {
+    // 1. 获取 Pod 的所有镜像 digest
+    digests := getImageDigests(pod)
+    
+    // 2. 获取选中节点的最新特征 (从 informer 缓存，接近实时)
+    nodeFeature := p.nodeFeatureLister.Get(nodeName)
+    if nodeFeature == nil {
+        return framework.NewStatus(framework.Error, "NodeFeature unavailable")
+    }
+    
+    // 3. 对每个镜像做实时兼容性验证
+    for _, digest := range digests {
+        icq := p.icqLister.Get("icq-" + digest)
+        if icq == nil {
+            continue // ICQ 不存在，跳过
+        }
+        
+        // 4. 实时匹配：用节点最新特征 vs ICQ 兼容性规则
+        if !p.matcher.Match(nodeFeature, icq.Spec.CompatibilityRules) {
+            // 5. 不兼容！拒绝绑定
+            p.recordEvent(pod, v1.EventTypeWarning, "NodeCompatibilityDrift",
+                fmt.Sprintf("Node %s drifted during scheduling", nodeName))
+            
+            return framework.NewStatus(framework.Unschedulable, 
+                "Node compatibility check failed in PreBind")
+        }
+    }
+    
+    // 6. 全部通过，允许绑定
+    return framework.NewStatus(framework.Success, "")
+}
+```
+
+### 调度后漂移：label + log 告警
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  调度后漂移处理流程                                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  T1: Pod 已调度到 node-50，正常运行                                          │
+│  T2: node-50 内核升级，特征漂移                                              │
+│  T3: NFD worker 上报新特征                                                   │
+│  T4: nfd-master 更新 NodeFeature                                             │
+│                                                                               │
+│  T5: Scheduler Plugin informer 回调触发                                      │
+│  T6: 重算 ICQ status.compatibleNodes                                         │
+│      → node-50 从 compatibleNodes 中移除                                     │
+│                                                                               │
+│  T7: 检测受影响的 Pod                                                        │
+│      → 查找运行在 node-50 上的所有 Pod                                       │
+│      → 对每个 Pod，检查其镜像是否匹配该 ICQ                                  │
+│      → 找到受影响的 Pod: [pod-A, pod-B, pod-C]                              │
+│                                                                               │
+│  T8: 对每个受影响的 Pod，执行告警:                                           │
+│                                                                               │
+│      ┌────────────────────────────────────────────────────────────────┐     │
+│      │ 1. 给 Pod 打 label                                             │     │
+│      │    kubectl label pod pod-A \                                   │     │
+│      │      nfd.k8s-sigs.io/compatibility-drift=true \                │     │
+│      │      nfd.k8s-sigs.io/drift-node=node-50 \                      │     │
+│      │      nfd.k8s-sigs.io/drift-time=2026-06-15T10:30:00Z           │     │
+│      │                                                                 │     │
+│      │    作用:                                                        │     │
+│      │    - 可通过 label selector 查询所有受漂移影响的 Pod             │     │
+│      │    - 可被监控系统采集                                           │     │
+│      │    - 可用于自动化脚本 (如自动迁移)                              │     │
+│      └────────────────────────────────────────────────────────────────┘     │
+│                                                                               │
+│      ┌────────────────────────────────────────────────────────────────┐     │
+│      │ 2. 记录结构化日志                                              │     │
+│      │    {                                                            │     │
+│      │      "timestamp": "2026-06-15T10:30:00Z",                      │     │
+│      │      "level": "warn",                                          │     │
+│      │      "event": "NodeCompatibilityDrift",                        │     │
+│      │      "pod": {                                                  │     │
+│      │        "name": "pod-A",                                        │     │
+│      │        "namespace": "production",                              │     │
+│      │        "uid": "pod-uid-xxx"                                    │     │
+│      │      },                                                        │     │
+│      │      "node": "node-50",                                        │     │
+│      │      "image": {                                                │     │
+│      │        "ref": "registry.example.com/app@sha256:aaa...",        │     │
+│      │        "digest": "sha256:aaa..."                               │     │
+│      │      },                                                        │     │
+│      │      "drifted_features": [                                     │     │
+│      │        {                                                       │     │
+│      │          "feature": "kernel.version",                          │     │
+│      │          "old_value": "6.8",                                   │     │
+│      │          "new_value": "6.9",                                   │     │
+│      │          "rule": "major In [\"6\"]"                            │     │
+│      │        }                                                       │     │
+│      │      ]                                                         │     │
+│      │    }                                                            │     │
+│      │                                                                 │     │
+│      │    作用:                                                        │     │
+│      │    - 可被日志平台 (ELK/Loki) 索引和查询                        │     │
+│      │    - 包含详细的漂移特征信息，便于排查                           │     │
+│      │    - 可触发告警规则                                             │     │
+│      └────────────────────────────────────────────────────────────────┘     │
+│                                                                               │
+│      ┌────────────────────────────────────────────────────────────────┐     │
+│      │ 3. 生成 K8s Event (可选)                                       │     │
+│      │    apiVersion: v1                                              │     │
+│      │    kind: Event                                                 │     │
+│      │    type: Warning                                               │     │
+│      │    reason: NodeCompatibilityDrift                              │     │
+│      │    regarding:                                                  │     │
+│      │      kind: Pod                                                 │     │
+│      │      name: pod-A                                               │     │
+│      │      namespace: production                                     │     │
+│      │    note: |                                                     │     │
+│      │      Node "node-50" no longer satisfies compatibility          │     │
+│      │      requirements for image "registry.example.com/app...".     │     │
+│      │      Drifted features:                                         │     │
+│      │        - kernel.version: 6.8 → 6.9                             │     │
+│      │      Action: Run `kubectl drain node-50` to migrate.           │     │
+│      │                                                                 │     │
+│      │    作用:                                                        │     │
+│      │    - kubectl describe pod 可直接看到告警                        │     │
+│      │    - 可被 Event 聚合工具收集                                    │     │
+│      │    - 与 K8s 原生事件系统一致                                    │     │
+│      └────────────────────────────────────────────────────────────────┘     │
+│                                                                               │
+│  T9: 管理员收到告警，决定处理方式:                                           │
+│      ─────────────────────────────────────────────────────────────────────  │
+│      选项 A: 忽略                                                            │
+│        - Pod 继续运行                                                        │
+│        - 等待下次自然迁移 (如 Deployment 滚动更新)                           │
+│      ─────────────────────────────────────────────────────────────────────  │
+│      选项 B: 手动迁移                                                        │
+│        - kubectl drain node-50                                               │
+│        - Pod 重新调度到兼容节点                                              │
+│        - 迁移后移除 label:                                                   │
+│          kubectl label pod pod-A nfd.k8s-sigs.io/compatibility-drift-        │
+│      ─────────────────────────────────────────────────────────────────────  │
+│      选项 C: 修复节点                                                        │
+│        - 恢复节点的兼容性特征                                                │
+│        - 节点重新进入 compatibleNodes                                        │
+│        - 移除 Pod 的 drift label                                             │
+│      ─────────────────────────────────────────────────────────────────────  │
+│                                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 用户查询漂移 Pod
+
+```bash
+# 查询所有受漂移影响的 Pod
+kubectl get pods --all-namespaces -l nfd.k8s-sigs.io/compatibility-drift=true
+
+# 查询特定节点的漂移 Pod
+kubectl get pods --all-namespaces -l nfd.k8s-sigs.io/drift-node=node-50
+
+# 查看 Pod 的漂移详情
+kubectl describe pod pod-A -n production
+# Events:
+#   Warning  NodeCompatibilityDrift  1h    nfd-image-compat-scheduler
+#     Node "node-50" no longer satisfies compatibility requirements...
+
+# 批量迁移漂移 Pod
+kubectl get pods --all-namespaces -l nfd.k8s-sigs.io/compatibility-drift=true \
+  -o jsonpath='{range .items[*]}kubectl drain {.spec.nodeName} --ignore-daemonsets --delete-emptydir-data{"\n"}{end}'
+
+# 迁移后移除 label
+kubectl label pod pod-A -n production nfd.k8s-sigs.io/compatibility-drift-
 ```
 
 ## 组件职责总结
@@ -529,12 +770,16 @@
 │  │                 │ • Filter:                                             │ │
 │  │                 │   - Compute intersection of all ICQ compatibleNodes   │ │
 │  │                 │   - Filter candidate nodes                            │ │
+│  │                 │ • PreBind:                                            │ │
+│  │                 │   - Real-time compatibility verification              │ │
+│  │                 │   - Reject bind if node drifted during scheduling     │ │
 │  │                 │ • Update ICQ refcount                                 │ │
 │  │                 │ • Watch NodeFeature changes via informer              │ │
 │  │                 │   - Recompute ICQ status when nodes change            │ │
 │  │                 │   - Detect drift (compare old/new status)             │ │
-│  │                 │   - Generate NodeCompatibilityDrift events            │ │
-│  │                 │   - Apply postDriftPolicy                             │ │
+│  │                 │   - Label affected Pods with drift info               │ │
+│  │                 │   - Log drift events (structured JSON)                │ │
+│  │                 │   - Generate K8s Events (optional)                    │ │
 │  │                 │ • GC: Monitor refcount, delete ICQ when expired       │ │
 │  └─────────────────┴──────────────────────────────────────────────────────┘ │
 │                                                                               │
@@ -575,12 +820,21 @@
 │     ├─ Scheduler plugin 管理 refcount 和 GC                                   │
 │     └─ 理由: ICQ 是调度相关资源，由调度组件管理，职责边界清晰                   │
 │                                                                               │
-│  6. 漂移检测由 scheduler plugin 负责                                          │
-│     ├─ 监听 NodeFeature 变化，重新计算 ICQ status                             │
-│     ├─ 对比新旧 status.compatibleNodes                                        │
-│     ├─ 生成 NodeCompatibilityDrift Event                                     │
-│     ├─ 可配置 postDriftPolicy (ignore/taint/deschedule)                      │
-│     └─ 理由: ICQ 由 scheduler plugin 管理，漂移检测自然由其负责               │
+│  6. 漂移处理两层设计                                                          │
+│     ├─ 调度前漂移:                                                            │
+│     │   ├─ 第一层: ICQ status 异步更新 (覆盖 99% 场景)                       │
+│     │   ├─ 第二层: PreBind 实时验证 (兜底 1% 竞态场景)                       │
+│     │   └─ 结果: 新 Pod 不会调度到漂移节点                                   │
+│     ├─ 调度后漂移:                                                            │
+│     │   ├─ 给 Pod 打 label (nfd.k8s-sigs.io/compatibility-drift)             │
+│     │   ├─ 记录结构化日志 (JSON 格式，包含漂移特征详情)                      │
+│     │   ├─ 生成 K8s Event (可选)                                             │
+│     │   └─ 结果: 管理员通过 label/log/event 发现漂移，决定是否迁移           │
+│     └─ 理由:                                                                  │
+│         ├─ PreBind 开销极小 (< 1ms)，保证调度正确性                          │
+│         ├─ 不做自动迁移，避免侵入性操作                                      │
+│         ├─ label 便于查询和自动化脚本                                         │
+│         └─ 结构化日志便于日志平台索引和告警                                   │
 │                                                                               │
 │  7. 降级机制                                                                  │
 │     ├─ Webhook 故障 → Scheduler 同步解析 + 创建 ICQ                          │

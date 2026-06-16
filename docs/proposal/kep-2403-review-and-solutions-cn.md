@@ -128,19 +128,30 @@
 - **不引入 Homogeneous condition 显式字段**：nfd-master 内部隐式检测 pre-group 一致性，不一致时自动回退到逐节点匹配
 - **调度器直接信任 status.nodes**：调度器在 Filter 阶段直接读取，无需任何额外校验
 
-#### 调度前漂移处理
-- 节点特征漂移 → NFD worker 上报 → nfd-master 更新 NodeFeature → 自动触发所有相关 NFG 的 status 重新计算
-- nfd-master 重算时利用 pre-group 加速匹配，如果 pre-group 内部不一致则自动回退到逐节点匹配
-- **scheduler 在 Filter 阶段直接读取 status.nodes，无需关心节点是否漂移**
+#### 调度前漂移处理（两层防护）
+- **第一层: ICQ status 异步更新 (覆盖 99% 场景)**
+  - 节点特征漂移 → NFD worker 上报 → nfd-master 更新 NodeFeature
+  - Scheduler Plugin 通过 informer 监听到变化，重算 ICQ status.compatibleNodes
+  - 漂移节点从 compatibleNodes 中移除，后续调度的 Pod 自动避开
+- **第二层: PreBind 实时验证 (兜底 1% 竞态场景)**
+  - 如果 informer 回调延迟，ICQ status 过时，PreBind 用节点最新特征做实时验证
+  - 发现漂移 → 拒绝绑定 → 重新调度
+  - PreBind 开销极小 (< 1ms)，保证调度的最终正确性
+- **结果**: 新 Pod 不会调度到漂移节点
 
-#### 调度后漂移处理（Scheduler Plugin 检测）
+#### 调度后漂移处理（label + log 告警）
 - 调度后漂移由 **Scheduler Plugin** 负责检测，因为 plugin 管理 ICQ 的完整生命周期
 - 检测方式: Scheduler plugin 监听 NodeFeature 变化，重算 ICQ status.compatibleNodes 时，对比新旧列表，找出"被移除的节点"
-- 检查被移除节点上是否有使用相关镜像的 Pod → 生成 `NodeCompatibilityDrift` Event
-- 处理策略（可配置 `postDriftPolicy`）:
-  - `ignore`（默认）: 不干预，Pod 继续运行。兼容性 ≠ 可用性，强制迁移可能比继续运行风险更大
-  - `taint`: 给节点打 taint，阻止新 Pod 调度
-  - `deschedule`: 触发 descheduler 迁移 Pod
+- 检查被移除节点上是否有使用相关镜像的 Pod
+- 对每个受影响的 Pod:
+  - **给 Pod 打 label**:
+    - `nfd.k8s-sigs.io/compatibility-drift: "true"`
+    - `nfd.k8s-sigs.io/drift-node: "node-50"`
+    - `nfd.k8s-sigs.io/drift-time: "2026-06-15T10:30:00Z"`
+  - **记录结构化日志**: JSON 格式，包含 pod/node/image/drifted_features 详情
+  - **生成 K8s Event** (可选): type=Warning, reason=NodeCompatibilityDrift
+- 管理员通过 label/log/event 发现漂移，决定是否迁移
+- **不做自动迁移**，避免侵入性操作（兼容性 ≠ 可用性，强制迁移可能比继续运行风险更大）
 
 #### NFG 生命周期 — Image 粒度 NFG + refcount + TTL
 - 每个 image digest 对应一个 NFG CR（详见第 7 节）

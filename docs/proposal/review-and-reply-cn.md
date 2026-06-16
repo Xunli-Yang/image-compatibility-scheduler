@@ -42,21 +42,40 @@ nfd-master 更新 pre-group 时:
 **漂移检测流程**：
 
 ```
-Scheduler plugin 监听到 NodeFeature 变化，重算 ImageCompatibilityQuery 的 status.compatibleNodes 时:
-  1. 计算新的 status.compatibleNodes（基于当前 NodeFeature，利用 pre-group 加速）
-  2. 对比旧的 status.compatibleNodes:
-     removedNodes = old.status.compatibleNodes - new.status.compatibleNodes
-  3. 对于每个 removedNode:
-     检查该节点上是否有 Pod 使用了该镜像
-     if 有:
-       生成 NodeCompatibilityDrift Event
-  4. 更新 status.compatibleNodes
+调度前漂移（两层防护）:
+  第一层: ICQ status 异步更新 (覆盖 99% 场景)
+    Scheduler plugin 监听到 NodeFeature 变化，重算 ICQ status.compatibleNodes
+    → 漂移节点从 compatibleNodes 中移除
+    → 后续调度的 Pod 自动避开漂移节点
+
+  第二层: PreBind 实时验证 (兜底 1% 竞态场景)
+    如果 informer 回调延迟，ICQ status 过时:
+    → PreBind 用节点最新特征做实时验证
+    → 发现漂移 → 拒绝绑定 → 重新调度
+    → PreBind 开销极小 (< 1ms)，保证调度的最终正确性
+
+调度后漂移（label + log 告警）:
+  Scheduler plugin 监听到 NodeFeature 变化，重算 ICQ status.compatibleNodes 时:
+    1. 计算新的 status.compatibleNodes
+    2. 对比旧的 status.compatibleNodes:
+       removedNodes = old - new
+    3. 对于每个 removedNode:
+       检查该节点上是否有 Pod 使用了该镜像
+       if 有:
+         - 给 Pod 打 label:
+           nfd.k8s-sigs.io/compatibility-drift: "true"
+           nfd.k8s-sigs.io/drift-node: "node-50"
+           nfd.k8s-sigs.io/drift-time: "2026-06-15T10:30:00Z"
+         - 记录结构化日志 (JSON 格式)
+         - 生成 K8s Event (可选)
+    4. 更新 status.compatibleNodes
 ```
 
-**漂移处理策略**（可配置 `postDriftPolicy`）：
-- `ignore`（默认）：仅生成 Event，不干预 Pod 运行。兼容性 ≠ 可用性，强制迁移风险可能更大
-- `taint`：给漂移节点打 taint，阻止新 Pod 调度
-- `deschedule`：触发 descheduler 迁移受影响的 Pod（对兼容性要求严格的场景）
+**漂移处理策略**：
+- **调度前漂移**: PreBind 实时验证兜底，保证新 Pod 不会调度到漂移节点
+- **调度后漂移**: 仅告警（label + log + event），不做自动迁移
+  - 兼容性 ≠ 可用性，强制迁移风险可能更大
+  - 管理员通过 label 查询受影响的 Pod，决定是否手动迁移
 
 ---
 
