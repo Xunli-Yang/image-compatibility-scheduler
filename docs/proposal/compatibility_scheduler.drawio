@@ -1192,6 +1192,11 @@
         <mxCell id="PCF-5" parent="PCF-2" style="html=1;shadow=0;dashed=0;align=center;verticalAlign=middle;shape=mxgraph.arrows2.arrow;dy=0;dx=10;notch=0;rotation=-90;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;Filter&lt;/font&gt;" vertex="1">
           <mxGeometry height="34" width="60" x="75" y="70" as="geometry" />
         </mxCell>
+
+        <!-- Filter detail label (added) -->
+        <mxCell id="PCF-L-FILTER-DETAIL" parent="PCF-2" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 8px;&quot;&gt;1. ICQ intersection&lt;br&gt;2. nodeSelector/affinity&lt;br&gt;3. Final = compat ∩ affinity&lt;/font&gt;" vertex="1">
+          <mxGeometry height="35" width="80" x="65" y="105" as="geometry" />
+        </mxCell>
         <mxCell id="PCF-6" parent="PCF-2" style="html=1;shadow=0;dashed=0;align=center;verticalAlign=middle;shape=mxgraph.arrows2.arrow;dy=0;dx=10;notch=0;rotation=-90;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;PreFilter&lt;/font&gt;" vertex="1">
           <mxGeometry height="34" width="60" x="9" y="70" as="geometry" />
         </mxCell>
@@ -1232,6 +1237,19 @@
         <!-- Mutating Webhook -->
         <mxCell id="PCF-16" parent="PCF-1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;Mutating Webhook&lt;/font&gt;" vertex="1">
           <mxGeometry height="30" width="140" x="386" y="180" as="geometry" />
+        </mxCell>
+
+        <!-- API Server (added) -->
+        <mxCell id="PCF-APISERVER" parent="PCF-1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;sketch=1;curveFitting=1;jiggle=2;fillColor=#dae8fc;fontFamily=Comic Sans MS;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 12px;&quot;&gt;API Server&lt;/font&gt;" vertex="1">
+          <mxGeometry height="40" width="80" x="250" y="180" as="geometry" />
+        </mxCell>
+
+        <!-- Edge: API Server → Webhook (added) -->
+        <mxCell id="PCF-E-AS-WH" edge="1" parent="PCF-1" source="PCF-APISERVER" target="PCF-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="PCF-L-AS-WH" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 10px;&quot;&gt;intercept Pod CREATE&lt;/font&gt;" vertex="1">
+          <mxGeometry height="20" width="100" x="335" y="165" as="geometry" />
         </mxCell>
 
         <!-- Edge: Image → Webhook (deploy) -->
@@ -1363,6 +1381,11 @@
           <mxGeometry height="45" width="106" x="616" y="720" as="geometry" />
         </mxCell>
 
+        <!-- Representative node matching detail (added) -->
+        <mxCell id="PCF-REP-MATCH-DETAIL" parent="PCF-1" style="rounded=1;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=9;" value="&lt;b&gt;Representative Node Matching&lt;/b&gt;&lt;br&gt;For each pre-group:&lt;br&gt;• Select representative node&lt;br&gt;• Match against ICQ spec&lt;br&gt;• If match → add all group nodes&lt;br&gt;• If no match → skip group&lt;br&gt;&lt;br&gt;Complexity: O(1) per group&lt;br&gt;instead of O(N) per-node scan" vertex="1">
+          <mxGeometry height="90" width="180" x="380" y="720" as="geometry" />
+        </mxCell>
+
         <!-- Edge: ICQ → match group -->
         <mxCell id="PCF-41" edge="1" parent="PCF-1" source="PCF-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-40">
           <mxGeometry relative="1" as="geometry" />
@@ -1374,6 +1397,11 @@
         <!-- Node Pool area -->
         <mxCell id="PCF-42" parent="PCF-1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;" value="" vertex="1">
           <mxGeometry height="140" width="300" x="567" y="860" as="geometry" />
+        </mxCell>
+
+        <!-- Ungrouped nodes detail (added) -->
+        <mxCell id="PCF-UNGRP-DETAIL" parent="PCF-1" style="rounded=1;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Comic Sans MS;fontSize=9;" value="&lt;b&gt;Ungrouped Nodes (Residual Set)&lt;/b&gt;&lt;br&gt;ungroupedNodes = allNodes - ∪(pre-group nodes)&lt;br&gt;&lt;br&gt;Per-node match (no representative optimization)&lt;br&gt;Complexity: O(U) where U = ungrouped count" vertex="1">
+          <mxGeometry height="60" width="250" x="580" y="1010" as="geometry" />
         </mxCell>
         <mxCell id="PCF-43" parent="PCF-1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="Group1" vertex="1">
           <mxGeometry height="100" width="70" x="578" y="870" as="geometry" />
