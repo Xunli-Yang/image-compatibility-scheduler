@@ -1,4 +1,4 @@
-<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36" version="29.3.2" pages="8">
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36" pages="8">
   <diagram name="solution1" id="4OLuDypHRlURJjMVAxcV">
     <mxGraphModel dx="2066" dy="1111" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
@@ -1171,12 +1171,10 @@
     </mxGraphModel>
   </diagram>
   <diagram name="proposal-c-final" id="proposal-c-final-architecture">
-    <mxGraphModel dx="784" dy="1110" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="1712" dy="926" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="PCF-0" />
         <mxCell id="PCF-1" parent="PCF-0" />
-
-        <!-- Scheduler Framework group (with PreBind) -->
         <mxCell id="PCF-2" connectable="0" parent="PCF-1" style="group;sketch=1;curveFitting=1;jiggle=2;fillColor=default;" value="" vertex="1">
           <mxGeometry height="153" width="280" x="548" y="273" as="geometry" />
         </mxCell>
@@ -1191,11 +1189,6 @@
         </mxCell>
         <mxCell id="PCF-5" parent="PCF-2" style="html=1;shadow=0;dashed=0;align=center;verticalAlign=middle;shape=mxgraph.arrows2.arrow;dy=0;dx=10;notch=0;rotation=-90;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;Filter&lt;/font&gt;" vertex="1">
           <mxGeometry height="34" width="60" x="75" y="70" as="geometry" />
-        </mxCell>
-
-        <!-- Filter detail label (added) -->
-        <mxCell id="PCF-L-FILTER-DETAIL" parent="PCF-2" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 8px;&quot;&gt;1. ICQ intersection&lt;br&gt;2. nodeSelector/affinity&lt;br&gt;3. Final = compat ∩ affinity&lt;/font&gt;" vertex="1">
-          <mxGeometry height="35" width="80" x="65" y="105" as="geometry" />
         </mxCell>
         <mxCell id="PCF-6" parent="PCF-2" style="html=1;shadow=0;dashed=0;align=center;verticalAlign=middle;shape=mxgraph.arrows2.arrow;dy=0;dx=10;notch=0;rotation=-90;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;PreFilter&lt;/font&gt;" vertex="1">
           <mxGeometry height="34" width="60" x="9" y="70" as="geometry" />
@@ -1218,81 +1211,45 @@
         <mxCell id="PCF-12" parent="PCF-2" style="html=1;shadow=0;dashed=0;align=center;verticalAlign=middle;shape=mxgraph.arrows2.arrow;dy=0;dx=10;notch=0;rotation=-90;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;PreBind&lt;/font&gt;" vertex="1">
           <mxGeometry height="34" width="60" x="181.5" y="70" as="geometry" />
         </mxCell>
-
-        <!-- OCI artifact -->
         <mxCell id="PCF-13" parent="PCF-1" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;" value="oci-image-compatibility artifact" vertex="1">
-          <mxGeometry height="100" width="80" x="200" y="260" as="geometry" />
+          <mxGeometry height="80" width="70" x="160" y="440" as="geometry" />
         </mxCell>
-
-        <!-- Image -->
         <mxCell id="PCF-14" parent="PCF-1" style="sketch=1;verticalLabelPosition=bottom;sketch=0;aspect=fixed;html=1;verticalAlign=top;strokeColor=none;fillColor=#000000;align=center;outlineConnect=0;pointerEvents=1;shape=mxgraph.citrix2.image_portability_service;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;image&lt;/font&gt;" vertex="1">
-          <mxGeometry height="80.02" width="79.96" x="386" y="284.98" as="geometry" />
+          <mxGeometry height="55.02" width="54.98" x="286" y="478" as="geometry" />
         </mxCell>
-
-        <!-- Edge: OCI → Image -->
         <mxCell id="PCF-15" edge="1" parent="PCF-1" source="PCF-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0;exitDx=80;exitDy=65;exitPerimeter=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-14">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- Mutating Webhook -->
-        <mxCell id="PCF-16" parent="PCF-1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;Mutating Webhook&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="140" x="386" y="180" as="geometry" />
+        <mxCell id="PCF-16" parent="PCF-1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;Mutating Webhook&lt;/font&gt;" vertex="1">
+          <mxGeometry height="30" width="140" x="353" y="571" as="geometry" />
         </mxCell>
-
-        <!-- API Server (added) -->
         <mxCell id="PCF-APISERVER" parent="PCF-1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;sketch=1;curveFitting=1;jiggle=2;fillColor=#dae8fc;fontFamily=Comic Sans MS;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 12px;&quot;&gt;API Server&lt;/font&gt;" vertex="1">
-          <mxGeometry height="40" width="80" x="250" y="180" as="geometry" />
-        </mxCell>
-
-        <!-- Edge: API Server → Webhook (added) -->
-        <mxCell id="PCF-E-AS-WH" edge="1" parent="PCF-1" source="PCF-APISERVER" target="PCF-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" value="">
-          <mxGeometry relative="1" as="geometry" />
+          <mxGeometry height="40" width="80" x="383" y="480" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L-AS-WH" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 10px;&quot;&gt;intercept Pod CREATE&lt;/font&gt;" vertex="1">
-          <mxGeometry height="20" width="100" x="335" y="165" as="geometry" />
+          <mxGeometry height="20" width="100" x="414" y="533.02" as="geometry" />
         </mxCell>
-
-        <!-- Edge: Image → Webhook (deploy) -->
-        <mxCell id="PCF-17" edge="1" parent="PCF-1" source="PCF-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="PCF-16">
+        <mxCell id="PCF-17" edge="1" parent="PCF-1" source="PCF-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;entryX=0;entryY=0;entryDx=0;entryDy=25;entryPerimeter=0;" target="PCF-APISERVER">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- Edge: Webhook → Scheduler Framework -->
-        <mxCell id="PCF-18" edge="1" parent="PCF-1" source="PCF-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="PCF-2">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="456" y="160" />
-              <mxPoint x="530" y="160" />
-              <mxPoint x="530" y="350" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-
-        <!-- Labels -->
         <mxCell id="PCF-L1" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;oras attach&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="80" x="286" y="295" as="geometry" />
+          <mxGeometry height="30" width="80" x="230" y="450" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L2" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;deploy&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="60" x="440" y="240" as="geometry" />
+          <mxGeometry height="30" width="60" x="330" y="460" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L3" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;parse &amp; create ICQ spec&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="140" x="460" y="180" as="geometry" />
+          <mxGeometry height="30" width="140" x="427" y="610" as="geometry" />
         </mxCell>
-
-        <!-- Scheduler-plugin -->
         <mxCell id="PCF-20" parent="PCF-1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;Scheduler-plugin&lt;/font&gt;" vertex="1">
           <mxGeometry height="30" width="217" x="563" y="466" as="geometry" />
         </mxCell>
-
-        <!-- Edge: Scheduler Framework → Plugin (dashed) -->
         <mxCell id="PCF-21" edge="1" parent="PCF-1" source="PCF-2" style="endArrow=none;dashed=1;html=1;dashPattern=1 3;strokeWidth=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;sketch=1;curveFitting=1;jiggle=2;" value="">
           <mxGeometry height="50" relative="1" width="50" as="geometry">
             <mxPoint x="688" y="426" as="sourcePoint" />
             <mxPoint x="688" y="466" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-
-        <!-- Edge: Plugin → PreBind (validate) -->
         <mxCell id="PCF-22" edge="1" parent="PCF-1" source="PCF-20" style="endArrow=none;dashed=1;html=1;dashPattern=1 3;strokeWidth=1;rounded=0;exitX=0.908;exitY=0.1;exitDx=0;exitDy=0;exitPerimeter=0;sketch=1;curveFitting=1;jiggle=2;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="PCF-12" value="">
           <mxGeometry height="50" relative="1" width="50" as="geometry">
             <mxPoint x="890" y="473" as="sourcePoint" />
@@ -1300,21 +1257,17 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="PCF-L4" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;validate&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="60" x="820" y="430" as="geometry" />
+          <mxGeometry height="30" width="60" x="760" y="430" as="geometry" />
         </mxCell>
-
-        <!-- Edge: Plugin → ICQ (create & compute status) -->
-        <mxCell id="PCF-23" edge="1" parent="PCF-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;" target="PCF-25" value="">
+        <mxCell id="PCF-23" edge="1" parent="PCF-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;entryX=0.114;entryY=-0.008;entryDx=0;entryDy=0;entryPerimeter=0;" target="PCF-25" value="">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="586" y="493" as="sourcePoint" />
             <mxPoint x="586" y="560" as="targetPoint" />
           </mxGeometry>
         </mxCell>
         <mxCell id="PCF-L5" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;compute status&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="100" x="500" y="510" as="geometry" />
+          <mxGeometry height="30" width="100" x="493" y="503" as="geometry" />
         </mxCell>
-
-        <!-- ImageCompatibilityQuery CRD -->
         <mxCell id="PCF-25" parent="PCF-1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="ImageCompatibilityQuery" vertex="1">
           <mxGeometry height="130" width="219" x="561" y="546" as="geometry" />
         </mxCell>
@@ -1324,8 +1277,6 @@
         <mxCell id="PCF-27" parent="PCF-25" style="text;strokeColor=default;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;dashed=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="status:&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&amp;nbsp; &amp;nbsp;compatibleNodes:&lt;/span&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; - name: node-1&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; - name: node-2&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; - name: node-3&lt;span style=&quot;white-space: pre;&quot;&gt;&#x9;&lt;/span&gt;&lt;br&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
           <mxGeometry height="80" width="219" y="50" as="geometry" />
         </mxCell>
-
-        <!-- Edge: ICQ → Scheduler Framework (filter by status) -->
         <mxCell id="PCF-28" edge="1" parent="PCF-1" source="PCF-25" style="endArrow=classic;html=1;rounded=0;entryX=0.696;entryY=1.133;entryDx=0;entryDy=0;entryPerimeter=0;exitX=0.699;exitY=-0.008;exitDx=0;exitDy=0;exitPerimeter=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-20" value="">
           <mxGeometry height="50" relative="1" width="50" as="geometry">
             <mxPoint x="720" y="552" as="sourcePoint" />
@@ -1335,23 +1286,17 @@
         <mxCell id="PCF-L6" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;filter by status&lt;/font&gt;" vertex="1">
           <mxGeometry height="30" width="90" x="720" y="513" as="geometry" />
         </mxCell>
-
-        <!-- nfd-master -->
-        <mxCell id="PCF-30" parent="PCF-1" style="whiteSpace=wrap;html=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;nfd-master&lt;/font&gt;" vertex="1">
-          <mxGeometry height="35" width="120" x="120" y="466" as="geometry" />
+        <mxCell id="PCF-30" parent="PCF-1" style="whiteSpace=wrap;html=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;fillColor=#e1d5e7;strokeColor=#9673a6;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 14px;&quot;&gt;nfd-master&lt;/font&gt;" vertex="1">
+          <mxGeometry height="35" width="120" x="222" y="790" as="geometry" />
         </mxCell>
-
-        <!-- Edge: PreFilter → artifact (fetch) -->
         <mxCell id="PCF-31" edge="1" parent="PCF-1" source="PCF-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.95;entryY=0.867;entryDx=0;entryDy=0;entryPerimeter=0;sketch=1;curveFitting=1;jiggle=2;dashed=1;endArrow=none;endFill=0;" target="PCF-L7" value="">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L7" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;artifact&lt;/font&gt;" vertex="1">
           <mxGeometry height="30" width="60" x="530" y="440" as="geometry" />
         </mxCell>
-
-        <!-- NodeFeatureGroup (admin pre-group) CRD -->
         <mxCell id="PCF-32" parent="PCF-1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="NodeFeatureGroup (admin pre-group)" vertex="1">
-          <mxGeometry height="130" width="200" x="80" y="546" as="geometry" />
+          <mxGeometry height="130" width="200" x="182" y="870" as="geometry" />
         </mxCell>
         <mxCell id="PCF-33" parent="PCF-32" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="spec.featureGroupRules" vertex="1">
           <mxGeometry height="20" width="200" y="30" as="geometry" />
@@ -1359,52 +1304,38 @@
         <mxCell id="PCF-34" parent="PCF-32" style="text;strokeColor=default;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;dashed=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="status:&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&amp;nbsp; &amp;nbsp;nodes:&lt;/span&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; - name: node-1&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; - name: node-2&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; - name: node-3&lt;span style=&quot;white-space: pre;&quot;&gt;&#x9;&lt;/span&gt;&lt;br&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
           <mxGeometry height="80" width="200" y="50" as="geometry" />
         </mxCell>
-
-        <!-- Edge: nfd-master → NFG (update status) -->
         <mxCell id="PCF-35" edge="1" parent="PCF-1" source="PCF-30" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="PCF-32">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L8" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;update status&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="100" x="100" y="505" as="geometry" />
+          <mxGeometry height="30" width="100" x="182" y="830" as="geometry" />
         </mxCell>
-
-        <!-- Edge: Plugin reads NFG (dashed) -->
-        <mxCell id="PCF-36" edge="1" parent="PCF-1" source="PCF-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=5 5;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="PCF-32">
+        <mxCell id="PCF-36" edge="1" parent="PCF-1" source="PCF-42" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=5 5;exitX=-0.009;exitY=0.541;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitPerimeter=0;" target="PCF-32">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L9" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;read pre-group&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="120" x="340" y="470" as="geometry" />
+          <mxGeometry height="30" width="120" x="393" y="904" as="geometry" />
         </mxCell>
-
-        <!-- Match group decision diamond -->
         <mxCell id="PCF-40" parent="PCF-1" style="rhombus;whiteSpace=wrap;html=1;fontColor=#000000;fillColor=#FFFF00;strokeColor=light-dark(#100f0f, #ff9090);sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;match&amp;nbsp;&lt;/font&gt;&lt;div&gt;&lt;font face=&quot;Comic Sans MS&quot;&gt;group&lt;/font&gt;&lt;/div&gt;" vertex="1">
-          <mxGeometry height="45" width="106" x="616" y="720" as="geometry" />
+          <mxGeometry height="45" width="106" x="617" y="720" as="geometry" />
         </mxCell>
-
-        <!-- Representative node matching detail (added) -->
         <mxCell id="PCF-REP-MATCH-DETAIL" parent="PCF-1" style="rounded=1;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=9;" value="&lt;b&gt;Representative Node Matching&lt;/b&gt;&lt;br&gt;For each pre-group:&lt;br&gt;• Select representative node&lt;br&gt;• Match against ICQ spec&lt;br&gt;• If match → add all group nodes&lt;br&gt;• If no match → skip group&lt;br&gt;&lt;br&gt;Complexity: O(1) per group&lt;br&gt;instead of O(N) per-node scan" vertex="1">
-          <mxGeometry height="90" width="180" x="380" y="720" as="geometry" />
+          <mxGeometry height="107.5" width="180" x="827" y="660" as="geometry" />
         </mxCell>
-
-        <!-- Edge: ICQ → match group -->
         <mxCell id="PCF-41" edge="1" parent="PCF-1" source="PCF-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-40">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L10" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;select the matched group&lt;/font&gt;" vertex="1">
           <mxGeometry height="30" width="147" x="480" y="750" as="geometry" />
         </mxCell>
-
-        <!-- Node Pool area -->
         <mxCell id="PCF-42" parent="PCF-1" style="rounded=0;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;" value="" vertex="1">
-          <mxGeometry height="140" width="300" x="567" y="860" as="geometry" />
+          <mxGeometry height="140" width="300" x="513" y="860" as="geometry" />
         </mxCell>
-
-        <!-- Ungrouped nodes detail (added) -->
-        <mxCell id="PCF-UNGRP-DETAIL" parent="PCF-1" style="rounded=1;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Comic Sans MS;fontSize=9;" value="&lt;b&gt;Ungrouped Nodes (Residual Set)&lt;/b&gt;&lt;br&gt;ungroupedNodes = allNodes - ∪(pre-group nodes)&lt;br&gt;&lt;br&gt;Per-node match (no representative optimization)&lt;br&gt;Complexity: O(U) where U = ungrouped count" vertex="1">
-          <mxGeometry height="60" width="250" x="580" y="1010" as="geometry" />
+        <mxCell id="PCF-UNGRP-DETAIL" parent="PCF-1" style="rounded=1;whiteSpace=wrap;html=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Comic Sans MS;fontSize=9;" value="&lt;b&gt;Ungrouped Nodes (Residual Set)&lt;/b&gt;&lt;br&gt;ungroupedNodes = allNodes - ∪(pre-group nodes)&lt;br&gt;&lt;div&gt;&lt;br/&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="70" width="155" x="835" y="890" as="geometry" />
         </mxCell>
         <mxCell id="PCF-43" parent="PCF-1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="Group1" vertex="1">
-          <mxGeometry height="100" width="70" x="578" y="870" as="geometry" />
+          <mxGeometry height="100" width="70" x="524" y="870" as="geometry" />
         </mxCell>
         <mxCell id="PCF-44" parent="PCF-43" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="spec" vertex="1">
           <mxGeometry height="20" width="70" y="30" as="geometry" />
@@ -1413,7 +1344,7 @@
           <mxGeometry height="50" width="70" y="50" as="geometry" />
         </mxCell>
         <mxCell id="PCF-46" parent="PCF-1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="Group2" vertex="1">
-          <mxGeometry height="100" width="70" x="658" y="870" as="geometry" />
+          <mxGeometry height="100" width="70" x="604" y="870" as="geometry" />
         </mxCell>
         <mxCell id="PCF-47" parent="PCF-46" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="spec" vertex="1">
           <mxGeometry height="20" width="70" y="30" as="geometry" />
@@ -1422,7 +1353,7 @@
           <mxGeometry height="50" width="70" y="50" as="geometry" />
         </mxCell>
         <mxCell id="PCF-49" parent="PCF-1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="Group N" vertex="1">
-          <mxGeometry height="100" width="70" x="777" y="870" as="geometry" />
+          <mxGeometry height="100" width="70" x="723" y="870" as="geometry" />
         </mxCell>
         <mxCell id="PCF-50" parent="PCF-49" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" value="spec" vertex="1">
           <mxGeometry height="20" width="70" y="30" as="geometry" />
@@ -1431,13 +1362,11 @@
           <mxGeometry height="50" width="70" y="50" as="geometry" />
         </mxCell>
         <mxCell id="PCF-52" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;b&gt;&lt;font style=&quot;font-size: 16px;&quot;&gt;...&lt;/font&gt;&lt;/b&gt;" vertex="1">
-          <mxGeometry height="30" width="60" x="728" y="904" as="geometry" />
+          <mxGeometry height="30" width="60" x="674" y="904" as="geometry" />
         </mxCell>
         <mxCell id="PCF-L11" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;Node Pool&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="60" x="687" y="970" as="geometry" />
+          <mxGeometry height="30" width="60" x="633" y="970" as="geometry" />
         </mxCell>
-
-        <!-- Edges from match group to nodes -->
         <mxCell id="PCF-53" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-55">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
@@ -1446,36 +1375,27 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="PCF-54" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-57">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="PCF-55" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="PCF-59">
+        <mxCell id="PCF-54" edge="1" parent="PCF-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;" target="PCF-57">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="669" y="785" />
-              <mxPoint x="812" y="785" />
+              <mxPoint x="669" y="780" />
+              <mxPoint x="640" y="780" />
             </Array>
+            <mxPoint x="669" y="765" as="sourcePoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="PCF-56" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-60">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Nodes -->
-        <mxCell id="PCF-55" parent="PCF-1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;Node A&lt;/font&gt;" vertex="1">
-          <mxGeometry height="40" width="40" x="593" y="800" as="geometry" />
+        <mxCell id="0" parent="PCF-1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;Node A&lt;/font&gt;" vertex="1">
+          <mxGeometry height="40" width="40" x="539" y="800" as="geometry" />
         </mxCell>
         <mxCell id="PCF-57" parent="PCF-1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;Node B&lt;/font&gt;" vertex="1">
-          <mxGeometry height="37" width="37" x="675" y="800" as="geometry" />
+          <mxGeometry height="37" width="37" x="621" y="800" as="geometry" />
         </mxCell>
         <mxCell id="PCF-59" parent="PCF-1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 10px;&quot;&gt;Node N&lt;/font&gt;" vertex="1">
-          <mxGeometry height="40" width="40" x="792" y="800" as="geometry" />
+          <mxGeometry height="40" width="40" x="738" y="800" as="geometry" />
         </mxCell>
         <mxCell id="PCF-60" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;b&gt;&lt;font style=&quot;font-size: 16px;&quot;&gt;...&lt;/font&gt;&lt;/b&gt;" vertex="1">
-          <mxGeometry height="30" width="60" x="727" y="800" as="geometry" />
+          <mxGeometry height="30" width="60" x="673" y="800" as="geometry" />
         </mxCell>
-
-        <!-- Node to Group dashed edges -->
         <mxCell id="PCF-61" edge="1" parent="PCF-1" source="PCF-55" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;dashPattern=1 4;endArrow=none;endFill=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-43">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
@@ -1485,23 +1405,93 @@
         <mxCell id="PCF-63" edge="1" parent="PCF-1" source="PCF-59" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;dashPattern=1 4;endArrow=none;endFill=0;sketch=1;curveFitting=1;jiggle=2;" target="PCF-49">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-
-        <!-- Labels -->
         <mxCell id="PCF-L12" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;one node from group&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="148" x="442" y="807" as="geometry" />
+          <mxGeometry height="30" width="101" x="429" y="805" as="geometry" />
         </mxCell>
-
-        <!-- Drift detection: Scheduler plugin → label/log -->
         <mxCell id="PCF-70" parent="PCF-1" style="shape=process;whiteSpace=wrap;html=1;backgroundOutline=1;sketch=1;curveFitting=1;jiggle=2;fillColor=#FFCC00;fontFamily=Comic Sans MS;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 12px;&quot;&gt;label + log + event&lt;/font&gt;" vertex="1">
-          <mxGeometry height="40" width="140" x="300" y="680" as="geometry" />
+          <mxGeometry height="40" width="140" x="867" y="461" as="geometry" />
         </mxCell>
-        <mxCell id="PCF-71" edge="1" parent="PCF-1" source="PCF-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="PCF-70">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="PCF-71" edge="1" parent="PCF-1" source="PCF-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="PCF-70">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="563" y="481" as="sourcePoint" />
+          </mxGeometry>
         </mxCell>
         <mxCell id="PCF-L13" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot;&gt;drift detected&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="100" x="440" y="660" as="geometry" />
+          <mxGeometry height="30" width="100" x="770" y="485" as="geometry" />
         </mxCell>
-
+        <mxCell id="PCF-L-FILTER-DETAIL" parent="PCF-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=top;rounded=0;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font face=&quot;Comic Sans MS&quot; style=&quot;font-size: 8px;&quot;&gt;1. ICQ intersection&lt;br&gt;2. nodeSelector/affinity&lt;br&gt;3. Final = compat ∩ affinity&lt;/font&gt;" vertex="1">
+          <mxGeometry height="50" width="130" x="770" y="533" as="geometry" />
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-0" edge="1" parent="PCF-1" source="0" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;dashPattern=1 4;endArrow=none;endFill=0;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="PCF-43">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="577" y="840" as="sourcePoint" />
+            <mxPoint x="576" y="873" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-2" edge="1" parent="PCF-1" source="PCF-APISERVER" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=0;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="PCF-3" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="420" y="480" />
+              <mxPoint x="420" y="351" />
+            </Array>
+            <mxPoint x="420" y="530" as="sourcePoint" />
+            <mxPoint x="420" y="606" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-4" edge="1" parent="PCF-1" source="PCF-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="PCF-26">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="370" y="551" as="sourcePoint" />
+            <mxPoint x="412" y="550" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-6" edge="1" parent="PCF-1" source="PCF-APISERVER" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;" target="PCF-16">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="410" y="541" as="sourcePoint" />
+            <mxPoint x="452" y="540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-8" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="0">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="669" y="780" />
+              <mxPoint x="559" y="780" />
+            </Array>
+            <mxPoint x="719" y="770" as="sourcePoint" />
+            <mxPoint x="690" y="805" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-9" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="PCF-60">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="669" y="780" />
+              <mxPoint x="703" y="780" />
+            </Array>
+            <mxPoint x="759" y="770" as="sourcePoint" />
+            <mxPoint x="730" y="805" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-10" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="PCF-59">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="669" y="780" />
+              <mxPoint x="758" y="780" />
+            </Array>
+            <mxPoint x="779" y="770" as="sourcePoint" />
+            <mxPoint x="750" y="805" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="psFW1D4lO8gEsbR5hxg5-11" edge="1" parent="PCF-1" source="PCF-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;" target="PCF-UNGRP-DETAIL">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="669" y="780" />
+              <mxPoint x="913" y="780" />
+              <mxPoint x="913" y="880" />
+              <mxPoint x="913" y="880" />
+            </Array>
+            <mxPoint x="740" y="780" as="sourcePoint" />
+            <mxPoint x="829" y="815" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
