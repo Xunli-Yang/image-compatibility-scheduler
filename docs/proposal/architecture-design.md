@@ -796,10 +796,12 @@ kubectl label pod pod-A -n production nfd.k8s-sigs.io/compatibility-drift-
 │     ├─ 隐式同构性检测 (不引入 Homogeneous 字段)                               │
 │     └─ 理由: 避免调度器复杂度，nfd-master 内部处理                            │
 │                                                                               │
-│  3. Webhook 预解析                                                            │
-│     ├─ Mutating Webhook + ICQ CR 持久化缓存                                  │
-│     ├─ ICQ CR 即持久化缓存，无需内存 LRU                                     │
-│     └─ 理由: 移除 registry I/O 出调度热路径                                   │
+│  3. Webhook 预解析与本地缓存                                                  │
+│     ├─ Mutating Webhook + 本地 LRU 缓存 + ICQ CR 持久化                      │
+│     ├─ 本地缓存: LRU + TTL 60s，避免短时间内重复访问 Registry                │
+│     ├─ ICQ CR: 持久化缓存，多实例共享                                        │
+│     ├─ 组合 Key: icq-{image-digest}-{artifact-digest}                        │
+│     └─ 理由: 避免 Registry 限流 + 自然处理 artifact 变化                     │
 │                                                                               │
 │  4. Image Digest 去重                                                         │
 │     ├─ ICQ 按 image digest 命名                                              │
@@ -844,3 +846,150 @@ kubectl label pod pod-A -n production nfd.k8s-sigs.io/compatibility-drift-
 │                                                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Webhook 本地缓存与 Artifact 变化处理
+
+### 设计思路
+
+本地缓存（LRU + TTL 60s）和 artifact 变化处理是**同一个流程的不同阶段**，不需要额外的后台 controller。
+
+### 缓存架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Webhook 缓存层次                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Layer 1: 进程内 LRU 缓存                                       │
+│  ├─ Key: image-digest                                           │
+│  ├─ Value: {artifact-digest, ICQ spec, timestamp}               │
+│  ├─ TTL: 60 秒                                                  │
+│  ├─ 容量: 10000 条目                                            │
+│  └─ 作用: 避免短时间内重复访问 Registry                          │
+│                                                                  │
+│  Layer 2: ICQ CR (Kubernetes etcd)                              │
+│  ├─ Key: icq-{image-digest}-{artifact-digest}                   │
+│  ├─ Value: ICQ CR spec + status                                 │
+│  └─ 作用: 持久化缓存，多实例共享                                │
+│                                                                  │
+│  Layer 3: Registry                                              │
+│  └─ 作用: 最终数据源                                            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 完整工作流程
+
+```
+Pod CREATE 请求
+    │
+    ▼
+对于每个容器镜像:
+    │
+    ├─ Step 1: 查本地缓存
+    │   key = image-digest
+    │   ├─ 命中且未过期 (<60s) → 直接使用缓存数据
+    │   └─ 未命中或过期 → 继续
+    │
+    ├─ Step 2: 访问 Registry
+    │   ├─ 获取 image manifest → image-digest
+    │   ├─ 获取 OCI artifact manifest → artifact-digest
+    │   └─ 解析兼容性元数据 → ICQ spec
+    │
+    ├─ Step 3: 检查 ICQ CR 是否存在
+    │   key = icq-{image-digest}-{artifact-digest}
+    │   ├─ 存在 → 加载到本地缓存
+    │   └─ 不存在 → 创建 ICQ CR，加载到本地缓存
+    │
+    └─ Step 4: 在 Pod annotation 中记录 ICQ 引用
+        └─ nfd.k8s-sigs.io/icq-refs: "icq-xxx,icq-yyy"
+```
+
+### 场景演示：Artifact 变化处理
+
+```
+T0: 镜像 v1 发布
+    - image-digest = "sha256:aaa"
+    - artifact-digest = "sha256:xxx"
+    - 兼容性要求: kernel>=5
+
+T1: Pod-1 创建
+    - 本地缓存 miss
+    - 访问 Registry → artifact-digest = "sha256:xxx"
+    - 构造 ICQ 名称: icq-sha256-aaa-sha256-xxx
+    - ICQ 不存在 → 创建 ICQ (spec: {kernel>=5})
+    - 更新本地缓存: {sha256:aaa → {artifact:xxx, spec:{kernel>=5}}, ttl=60s}
+
+T2~T59: Pod-2 ~ Pod-59 创建
+    - 本地缓存 hit (<60s)
+    - 直接使用缓存数据
+    - 0 次 Registry 请求
+
+T60: TTL 过期
+
+T61: Pod-60 创建
+    - 本地缓存过期
+    - 访问 Registry
+    - 发现 artifact-digest 已变为 "sha256:yyy"（镜像作者更新了兼容性元数据）
+    - 构造 ICQ 名称: icq-sha256-aaa-sha256-yyy（不同！）
+    - ICQ 不存在 → 创建新 ICQ（新规则: kernel>=6）
+    - 更新本地缓存: {sha256:aaa → {artifact:yyy, spec:{kernel>=6}}, ttl=60s}
+
+T62~T120: Pod-61 ~ Pod-120 创建
+    - 本地缓存 hit (<60s)
+    - 使用新 ICQ (kernel>=6)
+
+T120: TTL 过期，再次访问 Registry
+    - artifact-digest 未变 → 复用现有 ICQ
+```
+
+### 旧 ICQ 的清理
+
+```
+T120: 旧 ICQ (icq-sha256-aaa-sha256-xxx) 的引用情况
+    - 所有 Pod 都已使用新 ICQ
+    - 旧 ICQ refcount = 0
+    - 启动 TTL 清理计时器（默认 1 小时）
+
+T120 + 1h: 旧 ICQ 被删除
+```
+
+### 避免 Registry 限流
+
+| 场景 | 无缓存 | 有 LRU + TTL |
+|------|--------|-------------|
+| 1000 Pod，相同镜像 | 1000 次 registry 请求 | 1 次 registry 请求（首次） |
+| 1000 Pod，10 个镜像 | 1000 次请求 | 10 次请求（首次） |
+| 后续请求（60 秒内） | 每次都访问 | 缓存命中，0 次请求 |
+
+### 关键设计决策
+
+| 机制 | 作用 | 时间尺度 |
+|------|------|---------|
+| LRU 本地缓存 | 避免短时间内重复访问 Registry | 60 秒 |
+| 组合 Key | 确保 artifact 更新时创建新 ICQ | 即时 |
+| ICQ refcount | 跟踪哪些 Pod 使用哪个 ICQ | Pod 生命周期 |
+| ICQ TTL 清理 | 清理 refcount=0 的旧 ICQ | 1 小时 |
+
+### 为什么不需要后台 Controller？
+
+```
+传统方案:
+  - 后台 controller 定期检查所有 ICQ
+  - 发现 artifact 变化 → 更新 ICQ
+  - 问题: 需要额外的 controller，增加复杂性
+
+当前方案:
+  - TTL 过期后自然访问 Registry
+  - 发现 artifact 变化 → 创建新 ICQ
+  - 优势: 无需额外 controller，按需更新
+```
+
+### 总结
+
+**本地缓存和 artifact 变化处理是同一个流程**：
+1. **短期（<60s）**：本地缓存避免重复访问 Registry → 避免限流
+2. **长期（>60s）**：TTL 过期后自然发现 artifact 变化 → 创建新 ICQ
+3. **清理**：旧 ICQ 通过 refcount + TTL 自动清理
+
+**无需额外组件**：不需要后台 controller，所有逻辑都在 webhook 的请求处理流程中完成。
