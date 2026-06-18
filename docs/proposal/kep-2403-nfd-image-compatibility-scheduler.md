@@ -93,8 +93,10 @@ A new CRD `ImageCompatibilityQuery` is introduced to represent per-image compati
 apiVersion: nfd.k8s-sigs.io/v1alpha1
 kind: ImageCompatibilityQuery
 metadata:
-  name: icq-sha256-aaa123      # name = "icq-" + image digest prefix
+  name: icq-aaa123-xyz789      # name = "icq-" + image digest (12 chars) + "-" + artifact digest (12 chars)
   annotations:
+    nfd.k8s-sigs.io/image-digest: "sha256:aaa123..."      # full image digest
+    nfd.k8s-sigs.io/artifact-digest: "sha256:xyz789..."   # full artifact digest
     nfd.k8s-sigs.io/image-ref: "registry.example.com/app@sha256:aaa..."
     nfd.k8s-sigs.io/refcount: "3"
     nfd.k8s-sigs.io/last-used: "2026-06-15T10:05:00Z"
@@ -121,14 +123,16 @@ status:
 
 The process involves these main phases:
 
-1. **Initial Cluster Grouping:** In the cluster preparation stage, administrator should divide the cluster nodes into several groups by `NodeFeatureGroup`. Multiple `NodeFeatureGroup` CRs are created declaratively, each defining a grouping rule. Their status is populated with all matching nodes by nfd-master, completing the pre-grouping setup.
+1. **Initial Cluster Grouping (Optional):** In the cluster preparation stage, administrator should divide the cluster nodes into several groups by `NodeFeatureGroup`. Multiple `NodeFeatureGroup` CRs are created declaratively, each defining a grouping rule. Their status is populated with all matching nodes by nfd-master, completing the pre-grouping setup. The pre-grouping can effectively reduce the latency of scheduling, while it's not mandatory especially for small clusters.
 2. **Pod Admission (Webhook):** During Pod creation, the mutating webhook:
    - Extracts image references from all containers.
-   - For each image, parses it to get the digest and checks if ICQ `icq-{digest}` already exists.
-   - If ICQ exists → reuses it (no creation needed).
-   - If ICQ does not exist → fetches the OCI Artifact, extracts compatibility metadata, and creates the ICQ CR with `spec.compatibilityRules` populated.
-   - The ICQ CR itself serves as persistent cache (stored in etcd), eliminating the need for in-memory caching.
-   - Annotates the Pod with image digests: `nfd.k8s-sigs.io/image-digests: "sha256:aaa,sha256:bbb"`.
+   - For each image:
+     - Fetches image manifest from registry to get image digest.
+     - Fetches OCI artifact manifest from registry to get artifact digest.
+     - Constructs ICQ name: `icq-{image-digest-12chars}-{artifact-digest-12chars}`.
+     - Checks if ICQ already exists.
+     - If ICQ exists → reuses it. If ICQ does not exist → parses artifact metadata and creates the ICQ CR.
+   - Annotates the Pod with ICQ references: `nfd.k8s-sigs.io/icq-refs: "icq-xxx,icq-yyy"`.
 3. **Scheduling Prefilter Phase:** The scheduler plugin:
    - Reads Pod annotations to get image digests.
    - For each image, checks if ICQ exists and has `status.compatibleNodes` ready.
@@ -146,9 +150,9 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 
 **Phase 1: Pod Creation (Webhook)**
 - The mutating webhook intercepts the first Pod creation.
-- For `app@sha256:aaa`: webhook checks if ICQ `icq-sha256-aaa` exists → No → fetches OCI artifact, extracts compatibility rules (requires kernel 6.x and AVX2), creates ICQ CR with `spec.compatibilityRules`.
-- For `sidecar@sha256:bbb`: webhook checks if ICQ `icq-sha256-bbb` exists → No → fetches OCI artifact, extracts compatibility rules (requires kernel 5.x or later), creates ICQ CR.
-- Pod is annotated with `nfd.k8s-sigs.io/image-digests: "sha256:aaa,sha256:bbb"` and admitted.
+- For `app@sha256:aaa`: webhook fetches image manifest (image-digest=sha256:aaa) and artifact manifest (artifact-digest=sha256:xxx), checks if ICQ `icq-aaa-xxx` exists → No → extracts compatibility rules (requires kernel 6.x and AVX2), creates ICQ CR with `spec.compatibilityRules`.
+- For `sidecar@sha256:bbb`: webhook fetches image manifest (image-digest=sha256:bbb) and artifact manifest (artifact-digest=sha256:yyy), checks if ICQ `icq-bbb-yyy` exists → No → extracts compatibility rules (requires kernel 5.x or later), creates ICQ CR.
+- Pod is annotated with `nfd.k8s-sigs.io/icq-refs: "icq-aaa-xxx,icq-bbb-yyy"` and admitted.
 - For the 2nd and 3rd replicas: webhook finds ICQs already exist → reuses them (no registry fetch). Only 2 registry fetches total for all 3 Pods.
 
 **Phase 2: NFD Feature Collection (nfd-master)**
@@ -157,12 +161,12 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 
 **Phase 3: Scheduler Computes ICQ Status (Scheduler Plugin)**
 - Scheduler plugin detects new ICQs via informer.
-- For `icq-sha256-aaa` (requires kernel 6.x + AVX2):
+- For `icq-aaa-xxx` (requires kernel 6.x + AVX2):
   - Evaluates each pre-group using representative node matching.
   - `Group-1` representative node matches → adds all 1,200 nodes from `Group-1` to `status.compatibleNodes`.
   - `Group-2` representative node does not match (no AVX2) → skips entire group.
   - Continues for all groups → final `status.compatibleNodes` = 3,500 nodes.
-- For `icq-sha256-bbb` (requires kernel 5.x+):
+- For `icq-bbb-yyy` (requires kernel 5.x+):
   - Similar evaluation → `status.compatibleNodes` = 8,200 nodes.
 
 **Phase 4: Scheduling**
@@ -182,9 +186,10 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - Each `NodeFeatureGroup` defines grouping rules (e.g., kernel version, CPU features) and nfd-master populates `status.nodes` with matching nodes.
 
 2. **Mutating Webhook Design (Pod Creation Phase):**
-   - When a Pod is created, the mutating webhook intercepts the API server request and then checks if ICQ `icq-{digest}` already exists via K8s API.
+   - When a Pod is created, the mutating webhook intercepts the API server request and then checks if ICQ `icq-{image-digest-12chars}-{artifact-digest-12chars}` already exists via K8s API.
    - If ICQ exists → reuses it (no registry fetch needed). If ICQ does not exist → fetches OCI artifact, parses it, and creates the ICQ CR.
    - For a Deployment with 1000 replicas of the same image, only the first Pod triggers a registry fetch; the remaining 999 Pods reuse the existing ICQ CR.
+   - **Local LRU Cache (TTL 60s):** Webhook maintains an in-memory LRU cache to avoid repeated registry access within short time windows. Combined with ICQ CR as persistent cache, this two-layer caching prevents registry rate limiting while naturally handling artifact updates (TTL expiry triggers re-fetch, detects artifact-digest changes, creates new ICQ if needed).
 
 3. **Failure Policy for Compatibility Resolution (Scheduling Phase):**
    - When the webhook fails to fetch the OCI artifact, it creates an ICQ with `status.conditions[Ready]=False`. The scheduler plugin executes the failure policy during Prefilter, configured by  global  parameter `defaultCompatibilityFailurePolicy`:
@@ -193,7 +198,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - **Two-level policy:** Cluster-level default via scheduler config, per-pod override via annotation `nfd.k8s-sigs.io/compatibility-policy`.
 
 4. **ICQ Lifecycle Management (Persistent Cache):**
-   - ICQs are named by image digest prefix (`icq-sha256-{prefix}`), enabling automatic deduplication.
+   - ICQs are named by combination key (`icq-{image-digest-12chars}-{artifact-digest-12chars}`), enabling automatic deduplication and artifact change detection. Name length is 29 characters, well within Kubernetes limits.
    - 1000 replicas of the same image result in only 1 ICQ CR.
    - Reference counting (via annotation `nfd.k8s-sigs.io/refcount`) and TTL-based GC manage lifecycle.
    - Scheduler plugin increments refcount when Pod is scheduled, decrements when Pod terminates.
