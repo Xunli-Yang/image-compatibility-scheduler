@@ -96,7 +96,7 @@ metadata:
   name: icq-aaa123-xyz789      # name = "icq-" + image digest (12 chars) + "-" + artifact digest (12 chars)
   annotations:
     nfd.k8s-sigs.io/image-digest: "sha256:aaa123..."      # full image digest
-    nfd.k8s-sigs.io/artifact-digest: "sha256:xyz789..."   # full artifact digest
+    nfd.k8s-sigs.io/artifact-digest: "sha256:xyz789..."   # latest NFD compatibility artifact digest
     nfd.k8s-sigs.io/image-ref: "registry.example.com/app@sha256:aaa..."
     nfd.k8s-sigs.io/refcount: "3"
     nfd.k8s-sigs.io/last-used: "2026-06-15T10:05:00Z"
@@ -128,10 +128,10 @@ The process involves these main phases:
    - Extracts image references from all containers.
    - For each image:
      - Fetches image manifest from registry to get image digest.
-     - Fetches OCI artifact manifest from registry to get artifact digest.
+     - Fetches the latest NFD compatibility artifact to get artifact digest.
      - Constructs ICQ name: `icq-{image-digest-12chars}-{artifact-digest-12chars}`.
      - Checks if ICQ already exists.
-     - If ICQ exists → reuses it. If ICQ does not exist → parses artifact metadata and creates the ICQ CR.
+     - If ICQ exists → reuses it. If ICQ does not exist → parses compatibility rules and creates the ICQ CR.
    - Annotates the Pod with ICQ references: `nfd.k8s-sigs.io/icq-refs: "icq-xxx,icq-yyy"`.
 3. **Scheduling Prefilter Phase:** The scheduler plugin:
    - Reads Pod annotations to get image digests.
@@ -150,8 +150,8 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 
 **Phase 1: Pod Creation (Webhook)**
 - The mutating webhook intercepts the first Pod creation.
-- For `app@sha256:aaa`: webhook fetches image manifest (image-digest=sha256:aaa) and artifact manifest (artifact-digest=sha256:xxx), checks if ICQ `icq-aaa-xxx` exists → No → extracts compatibility rules (requires kernel 6.x and AVX2), creates ICQ CR with `spec.compatibilityRules`.
-- For `sidecar@sha256:bbb`: webhook fetches image manifest (image-digest=sha256:bbb) and artifact manifest (artifact-digest=sha256:yyy), checks if ICQ `icq-bbb-yyy` exists → No → extracts compatibility rules (requires kernel 5.x or later), creates ICQ CR.
+- For `app@sha256:aaa`: webhook fetches image manifest (image-digest=sha256:aaa) and latest NFD compatibility artifact (artifact-digest=sha256:xxx), checks if ICQ `icq-aaa-xxx` exists → No → extracts compatibility rules (requires kernel 6.x and AVX2), creates ICQ CR with `spec.compatibilityRules`.
+- For `sidecar@sha256:bbb`: webhook fetches image manifest (image-digest=sha256:bbb) and latest NFD compatibility artifact (artifact-digest=sha256:yyy), checks if ICQ `icq-bbb-yyy` exists → No → extracts compatibility rules (requires kernel 5.x or later), creates ICQ CR.
 - Pod is annotated with `nfd.k8s-sigs.io/icq-refs: "icq-aaa-xxx,icq-bbb-yyy"` and admitted.
 - For the 2nd and 3rd replicas: webhook finds ICQs already exist → reuses them (no registry fetch). Only 2 registry fetches total for all 3 Pods.
 
