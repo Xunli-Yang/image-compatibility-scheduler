@@ -291,9 +291,9 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 
 | Cluster Size (Nodes) | P99 Prefilter | P99 Filter | P99 Pod-Arrival-to-Bind | 1000 Pods Scheduling Duration |
 | :--- | :--- | :--- | :--- | :--- |
-| **1k** | < 50ms | < 20ms | < 200ms | < 60s |
-| **5k** | < 100ms | < 50ms | < 500ms | < 120s |
-| **10k** | < 200ms | < 100ms | < 1s | < 180s |
+| **1k** | < 50ms | < 20ms | < 100ms | < 10s |
+| **5k** | < 100ms | < 50ms | < 200ms | < 20s |
+| **10k** | < 200ms | < 100ms | < 500ms | < 50s |
 
     - **Performance Test Baseline (Cold Cache — first scheduling of new image):**
 
