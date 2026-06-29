@@ -209,12 +209,22 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - Uses NodeFeature informers to detect node feature changes and automatically recomputes ICQ status when nodes drift.
    - Status computation uses pre-group acceleration (see next point).
 
-6. **Representative Node Matching (Performance Optimization):**
+6. **Homogeneity Check Implementation (nfd-master):**
+   - **ImageCompatibility Controller:** An asynchronous controller within nfd-master that checks homogeneity for each pre-group NFG against each ICQ and updates labels.
+   - **Check Algorithm:**
+     1. Extract ICQ dimensions from `spec.compatibilityRules` (e.g., `[kernel.version, cpu.cpuid.AVX2]`).
+     2. For each pre-group NFG, check if all nodes in the group have the same values for these ICQ dimensions
+   - **Trigger Events:** ICQ creation/update, NodeFeature changes.
+   - **Label Format:** `nfd.k8s-sigs.io/homogeneous-for-{icq-name}: "true"|"false"`.
+
+7. **Representative Node Matching (Performance Optimization):**
    - The core performance optimization evaluates only a **single representative node** from each pre-existing group against the ICQ's compatibility rules, rather than scanning all nodes.
    - Reduces complexity from O(N) to O(G) where G is the number of groups (typically 10-50) and N is the total number of nodes.
-   - For each pre-group, if the representative node matches, all nodes in that group are added to `status.compatibleNodes`. If it does not match, the entire group is skipped.
+   - For each pre-group(async processing), the matching strategy is determined by the homogeneity label `nfd.k8s-sigs.io/homogeneous-for-{icq-name}`:
+     - **Label = "true"** → representative node matching: if the representative node matches, all nodes in that group are added to `status.compatibleNodes`. If it does not match, the entire group is skipped.
+     - **Label = "false"/missing** → node-by-node matching: each node in the group is checked against the ICQ rules individually.
 
-7. **Ungrouped Node Handling (Status Computation):**
+8. **Ungrouped Node Handling (Status Computation):**
    - Nodes that do not belong to any `NodeFeatureGroup` are automatically handled through an implicit residual set mechanism.
    - During ICQ status computation, the scheduler plugin identifies ungrouped nodes: `ungroupedNodes = allNodes - ∪(all pre-group status.nodes)`.
    - Ungrouped nodes are evaluated individually using per-node matching.
@@ -222,13 +232,13 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - This ensures that ungrouped nodes are not excluded from compatibility scheduling, while maintaining the performance benefits of pre-grouping for grouped nodes.
    - If all nodes are ungrouped, the system degrades gracefully to full per-node scanning (O(N) complexity).
 
-8. **Multi-Image Pod Handling (Filter Phase):**
+9. **Multi-Image Pod Handling (Filter Phase):**
    - For Pods with multiple containers (app + init + sidecars), each image gets its own ICQ.
    - The scheduler computes the intersection of all ICQs' `status.compatibleNodes` during the Filter phase.
    - Example: Pod has image-A (compatible with nodes 1-500) and image-B (compatible with nodes 1-800) → final compatible nodes are 1-500 (intersection).
    - Images without compatibility metadata are skipped (no ICQ created), meaning they impose no compatibility constraints.
 
-9. **Affinity/NodeSelector Compatibility (Filter Phase):**
+10. **Affinity/NodeSelector Compatibility (Filter Phase):**
    - The compatibility scheduling plugin works alongside existing node affinity and node selector mechanisms.
    - Compatibility filtering happens in the Filter phase, producing a set of compatible nodes.
    - This set is then intersected with nodes selected by affinity/nodeSelector rules (handled by native Kubernetes scheduler plugins).
@@ -236,7 +246,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - Example: compatibility filtering selects nodes 1-500, node affinity selects nodes 300-800 → final candidate nodes are 300-500 (intersection).
    - Ensures backward compatibility with existing Pod specs that use affinity/nodeSelector.
 
-10. **PreBind Validation (Final Validation):**
+11. **PreBind Validation (Final Validation):**
    - The PreBind phase provides real-time validation using the latest node features from informer cache.
    - Catches race conditions where ICQ status might be stale due to delayed informer updates.
    - If validation fails (e.g., node drifted between Prefilter and PreBind), the binding is rejected and the pod is rescheduled to a compatible node.
