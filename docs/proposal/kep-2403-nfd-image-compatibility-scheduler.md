@@ -42,6 +42,8 @@ The first phase of [KEP-1845 Proposal](https://github.com/kubernetes-sigs/node-f
 
 - Implement an image compatibility scheduling plugin based on NFD to schedule Pods to compatible nodes, providing a production-ready scheduling extension for tracking image compatibility requirements.
 - Introduce a new `ImageCompatibilityQuery` CRD to represent per-image compatibility queries, managed by the scheduler plugin.
+- Implement a mutating webhook to parse OCI artifacts during Pod admission and create ICQ CRs with compatibility rules.
+- Enhance nfd-master to manage `NodeFeatureGroup` homogeneity labels and detect post-scheduling node feature drift.
 - Leverage existing `NodeFeatureGroup` for node pre-grouping to optimize scheduling performance from O(N) to O(G) complexity.
 
 ### Non-Goals
@@ -61,7 +63,7 @@ When deploying applications that require specific hardware or software features 
 When node features drift over time (e.g., due to software updates or hardware changes), it can lead to mismatches between the pre-group definitions and the actual node capabilities. This drift can compromise the effectiveness of the pre-grouping strategy.
 It can be divided into two scenarios:
 1. **Drift Before Scheduling:** The nfd-master detects feature drift and updates the pre-group(`NodeFeatureGroup`) status accordingly. Drifted nodes are automatically removed from `NodeFeatureGroup` status. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
-2. **Drift After Scheduling:** When drift happens after a pod has been scheduled, the scheduler plugin detects affected pods and alerts administrators through:
+2. **Drift After Scheduling:** When drift happens after a pod has been scheduled, nfd-master detects the drifted node features, evaluates which ICQs are affected by comparing the drifted features against `spec.compatibilityRules`, finds pods bound to the drifted nodes via ICQ references, and alerts administrators through:
    - **Pod labels**: `nfd.k8s-sigs.io/compatibility-drift: "true"`, `nfd.k8s-sigs.io/drift-node`, `nfd.k8s-sigs.io/drift-time`
    - **Structured logs**: JSON format with pod/node/image/drifted_features details
    - **K8s Events**: Warning events with `reason: NodeCompatibilityDrift`
@@ -77,7 +79,7 @@ The core of this proposal is to implement an `ImageCompatibilityPlugin` within t
 **Component Responsibilities:**
 - **Mutating Webhook**: Parses OCI artifacts during Pod admission. Checks if ICQ already exists (by image digest); if not, fetches OCI artifact and creates ICQ CR with `spec.compatibilityRules` only (no status computation). The ICQ CR itself serves as persistent cache.
 - **Scheduler Plugin**: Computes and updates `status.compatibleNodes` for ICQs, performs PreBind validation, and detects post-scheduling drift.
-- **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only, and manages the homogeneity labels of pre-groups.
+- **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only, manages the homogeneity labels of pre-groups, and detects post-scheduling drift by comparing drifted node features against ICQ compatibility rules.
 
 ### Proposal C: Node Pre-grouping
 
@@ -130,59 +132,66 @@ The process involves these main phases:
      - Fetches image manifest from registry to get image digest.
      - Fetches the latest NFD compatibility artifact to get artifact digest.
      - Constructs ICQ name: `icq-{image-digest-12chars}-{artifact-digest-12chars}`.
-     - Checks if ICQ already exists.
-     - If ICQ exists → reuses it. If ICQ does not exist → parses compatibility rules and creates the ICQ CR.
+     - Checks if ICQ already exists：If ICQ exists → reuses it. If ICQ does not exist → parses compatibility rules and creates the ICQ CR.
    - Annotates the Pod with ICQ references: `nfd.k8s-sigs.io/icq-refs: "icq-xxx,icq-yyy"`.
-3. **Scheduling Prefilter Phase:** The scheduler plugin:
+1. **Scheduling Prefilter Phase:** The scheduler plugin:
    - Reads Pod annotations to get image digests.
    - For each image, checks if ICQ exists and has `status.compatibleNodes` ready.
    - If ICQ status is not ready, computes it by evaluating compatibility against admin pre-groups:
-     - For each `NodeFeatureGroup`, selects one representative node and checks if it satisfies the ICQ's `spec.compatibilityRules`.
-     - If the representative node matches, all nodes in that pre-group are added to `status.compatibleNodes`.
-     - If the representative node does not match, the entire group is skipped.
+     - For each `NodeFeatureGroup`, checks the homogeneity label `nfd.k8s-sigs.io/homogeneous-for-{icq-name}`.
+     - If label is "true", uses representative node matching: selects one representative node and checks if it satisfies the ICQ's `spec.compatibilityRules`. If the representative node matches, all nodes in that pre-group are added to `status.compatibleNodes`. If it does not match, the entire group is skipped.
+     - If label is "false" or missing, uses node-by-node matching: each node in the group is checked against the ICQ rules individually.
    - Updates `status.compatibleNodes` and sets `conditions[Ready]=True`.
-4. **Scheduling Filter Phase:** The scheduler filters candidate nodes by checking their presence in the `status.compatibleNodes` of all relevant ICQs (intersection for multi-image Pods).
-5. **Scheduling PreBind Phase:** A final validation step that re-verifies node compatibility using the latest node features from informer cache. This catches any race conditions where ICQ status might be stale due to delayed informer updates. If validation fails, the binding is rejected and the pod is rescheduled.
+2. **Scheduling Filter Phase:** The scheduler filters candidate nodes by checking their presence in the `status.compatibleNodes` of all relevant ICQs (intersection for multi-image Pods).
+3. **Scheduling PreBind Phase:** A final validation step that re-verifies node compatibility using the latest node features from informer cache. This catches any race conditions where ICQ status might be stale due to delayed informer updates. If validation fails, the binding is rejected and the pod is rescheduled.
 
 #### Example Flow
 
 Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Group-10`) via `NodeFeatureGroup`. A Deployment with 3 replicas is created, where each Pod has 2 containers: `app@sha256:aaa` and `sidecar@sha256:bbb`.
 
-**Phase 1: Pod Creation (Webhook)**
+**Phase 1: NFD Feature Collection (nfd-master)**
+- NFD workers on all nodes report hardware/software features to nfd-master.
+- nfd-master updates `NodeFeatureGroup` status: for each pre-group, computes `status.nodes` containing all nodes matching the group's criteria.
+
+**Phase 2: Pod Creation (Webhook)**
 - The mutating webhook intercepts the first Pod creation.
 - For `app@sha256:aaa`: webhook fetches image manifest (image-digest=sha256:aaa) and latest NFD compatibility artifact (artifact-digest=sha256:xxx), checks if ICQ `icq-aaa-xxx` exists → No → extracts compatibility rules (requires kernel 6.x and AVX2), creates ICQ CR with `spec.compatibilityRules`.
 - For `sidecar@sha256:bbb`: webhook fetches image manifest (image-digest=sha256:bbb) and latest NFD compatibility artifact (artifact-digest=sha256:yyy), checks if ICQ `icq-bbb-yyy` exists → No → extracts compatibility rules (requires kernel 5.x or later), creates ICQ CR.
 - Pod is annotated with `nfd.k8s-sigs.io/icq-refs: "icq-aaa-xxx,icq-bbb-yyy"` and admitted.
 - For the 2nd and 3rd replicas: webhook finds ICQs already exist → reuses them (no registry fetch). Only 2 registry fetches total for all 3 Pods.
 
-**Phase 2: NFD Feature Collection (nfd-master)**
-- NFD workers on all nodes report hardware/software features to nfd-master.
-- nfd-master updates `NodeFeatureGroup` status: for each pre-group, computes `status.nodes` containing all nodes matching the group's criteria.
+**Phase 3: Homogeneity Check (nfd-master, triggered by ICQ creation)**
+- nfd-master watches ICQ creation events via informer.
+- When new ICQ is created (e.g., `icq-aaa-xxx`), nfd-master extracts compatibility dimensions from `spec.compatibilityRules` (e.g., kernel.version, cpu.cpuid.AVX2).
+- For each pre-group, checks if all nodes have the same values for these dimensions:
+  - `Group-1` is homogeneous → label `nfd.k8s-sigs.io/homogeneous-for-icq-aaa-xxx: "true"`.
+  - `Group-3` is heterogeneous (mixed AVX2 support) → label `nfd.k8s-sigs.io/homogeneous-for-icq-aaa-xxx: "false"`.
 
-**Phase 3: Scheduler Computes ICQ Status (Scheduler Plugin)**
+**Phase 4: Scheduler Computes ICQ Status (Scheduler Plugin)**
 - Scheduler plugin detects new ICQs via informer.
 - For `icq-aaa-xxx` (requires kernel 6.x + AVX2):
-  - Evaluates each pre-group using representative node matching.
-  - `Group-1` representative node matches → adds all 1,200 nodes from `Group-1` to `status.compatibleNodes`.
-  - `Group-2` representative node does not match (no AVX2) → skips entire group.
+  - Evaluates each pre-group based on homogeneity label:
+  - `Group-1` (homogeneous=true): representative node matches → adds all 1,200 nodes from `Group-1` to `status.compatibleNodes`.
+  - `Group-2` (homogeneous=true): representative node does not match (no AVX2) → skips entire group.
+  - `Group-3` (homogeneous=false): node-by-node matching → adds 800 compatible nodes from 1,500 total.
   - Continues for all groups → final `status.compatibleNodes` = 3,500 nodes.
 - For `icq-bbb-yyy` (requires kernel 5.x+):
   - Similar evaluation → `status.compatibleNodes` = 8,200 nodes.
 
-**Phase 4: Scheduling**
-- **Prefilter**: Scheduler reads Pod annotations, queries both ICQs from informer cache, increments refcount.
+**Phase 5: Scheduling**
+- **Prefilter**: Scheduler reads Pod annotations, queries and updates the ICQ status.
 - **Filter**: Computes intersection: 3,500 ∩ 8,200 = 3,500 compatible nodes. Applies affinity/nodeSelector if present.
 - **Score/Reserve**: Selects best node from 3,500 candidates.
 - **PreBind**: Re-validates node compatibility using latest features from informer. If node is incompatible, rejects binding and reschedules.
 - **Bind**: Pod bound to selected node.
 
-**Performance Impact:** Without pre-grouping, evaluating 10,000 nodes per ICQ would require 20,000 checks. With pre-grouping (10 groups), only 20 representative node checks are needed (10 groups × 2 ICQs), reducing complexity by 1000x.
+**Performance Impact:** Without pre-grouping, evaluating 10,000 nodes per ICQ would require 20,000 checks. With pre-grouping and homogeneity check, homogeneous groups use representative node matching (O(G)), while heterogeneous groups use node-by-node matching. In this example, 8 homogeneous groups need only 16 checks, 2 heterogeneous groups need 3,000 checks, totaling ~3,016 checks — still a significant reduction.
 
 #### Key Characteristics
 
 1. **Administrator-Driven Grouping (Preparation Phase):**
    - Node groups are statically predefined by the cluster administrator using `NodeFeatureGroup` in cluster preparation phase.
-   - Aligns with common large-scale cluster management practices where operators organize nodes into pools based on hardware characteristics.
+   - Aligns with common large-scale cluster management practices where operators organize nodes into pools based on node features.
    - Each `NodeFeatureGroup` defines grouping rules (e.g., kernel version, CPU features) and nfd-master populates `status.nodes` with matching nodes.
 
 2. **Mutating Webhook Design (Pod Creation Phase):**
@@ -206,7 +215,6 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 
 5. **Scheduler Plugin Manages ICQ Status (Status Computation):**
    - The scheduler plugin computes and updates `status.compatibleNodes` for ICQs, ensuring tight integration with the scheduling lifecycle.
-   - Uses NodeFeature informers to detect node feature changes and automatically recomputes ICQ status when nodes drift.
    - Status computation uses pre-group acceleration (see next point).
 
 6. **Homogeneity Check Implementation (nfd-master):**
@@ -264,8 +272,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 
 #### Limitations
 
-- **Small Modification to NodeFeatureGroup Operations**: Including a small amount of the `NodeFeatureGroup` operation modification.
-- **Dependency on Group Homogeneity:** Requires administrator management for homogeneous grouping.
+- **Homogeneity Detection Overhead:** nfd-master must compute homogeneity labels for each ICQ-pre-group pair, which adds computational overhead proportional to the number of ICQs and pre-groups.
 
 ### Test Plan
 
