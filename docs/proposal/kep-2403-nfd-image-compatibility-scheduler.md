@@ -1,4 +1,4 @@
-#  KEP-2403: Image Compatibility Scheduler with NFD
+# KEP-2403: Image Compatibility Scheduler with NFD
 <!-- toc -->
 - [Summary](#summary)
 - [Motivation](#motivation)
@@ -60,7 +60,7 @@ When deploying applications that require specific hardware or software features 
 #### Node Features Drift Handling
 When node features drift over time (e.g., due to software updates or hardware changes), it can lead to mismatches between the pre-group definitions and the actual node capabilities. This drift can compromise the effectiveness of the pre-grouping strategy.
 It can be divided into two scenarios:
-1. **Drift Before Scheduling:** The nfd-master detects feature drift and updates the `NodeFeatureGroup` status accordingly. It ensures the pre-grouping remains homogeneous. Drifted nodes are automatically removed from `NodeFeatureGroup` status. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
+1. **Drift Before Scheduling:** The nfd-master detects feature drift and updates the pre-group(`NodeFeatureGroup`) status accordingly. Drifted nodes are automatically removed from `NodeFeatureGroup` status. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
 2. **Drift After Scheduling:** When drift happens after a pod has been scheduled, the scheduler plugin detects affected pods and alerts administrators through:
    - **Pod labels**: `nfd.k8s-sigs.io/compatibility-drift: "true"`, `nfd.k8s-sigs.io/drift-node`, `nfd.k8s-sigs.io/drift-time`
    - **Structured logs**: JSON format with pod/node/image/drifted_features details
@@ -77,7 +77,7 @@ The core of this proposal is to implement an `ImageCompatibilityPlugin` within t
 **Component Responsibilities:**
 - **Mutating Webhook**: Parses OCI artifacts during Pod admission. Checks if ICQ already exists (by image digest); if not, fetches OCI artifact and creates ICQ CR with `spec.compatibilityRules` only (no status computation). The ICQ CR itself serves as persistent cache.
 - **Scheduler Plugin**: Computes and updates `status.compatibleNodes` for ICQs, performs PreBind validation, and detects post-scheduling drift.
-- **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only. Does not manage ICQ status.
+- **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only, and manages the homogeneity labels of pre-groups.
 
 ### Proposal C: Node Pre-grouping
 
@@ -173,7 +173,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 - **Prefilter**: Scheduler reads Pod annotations, queries both ICQs from informer cache, increments refcount.
 - **Filter**: Computes intersection: 3,500 ∩ 8,200 = 3,500 compatible nodes. Applies affinity/nodeSelector if present.
 - **Score/Reserve**: Selects best node from 3,500 candidates.
-- **PreBind**: Re-validates node compatibility using latest features from informer. If node drifted, rejects binding and reschedules.
+- **PreBind**: Re-validates node compatibility using latest features from informer. If node is incompatible, rejects binding and reschedules.
 - **Bind**: Pod bound to selected node.
 
 **Performance Impact:** Without pre-grouping, evaluating 10,000 nodes per ICQ would require 20,000 checks. With pre-grouping (10 groups), only 20 representative node checks are needed (10 groups × 2 ICQs), reducing complexity by 1000x.
@@ -192,7 +192,7 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - **Local LRU Cache (TTL 60s):** Webhook maintains an in-memory LRU cache to avoid repeated registry access within short time windows. Combined with ICQ CR as persistent cache, this two-layer caching prevents registry rate limiting while naturally handling artifact updates (TTL expiry triggers re-fetch, detects artifact-digest changes, creates new ICQ if needed).
 
 3. **Failure Policy for Compatibility Resolution (Scheduling Phase):**
-   - When the webhook fails to fetch the OCI artifact, it creates an ICQ with `status.conditions[Ready]=False`. The scheduler plugin executes the failure policy during Prefilter, configured by  global  parameter `defaultCompatibilityFailurePolicy`:
+   - When the webhook fails to fetch the OCI artifact, it creates an ICQ with `status.conditions[Ready]=False`. The scheduler plugin executes the failure policy during Prefilter, configured by global parameter `defaultCompatibilityFailurePolicy`:
    - **Ignore (Fail-open, default):** Skips compatibility check, allows scheduling on any node. Suitable for development clusters.
    - **Fail (Fail-closed):** Marks Pod as Unschedulable, retries when registry recovers. Suitable for production clusters.
    - **Two-level policy:** Cluster-level default via scheduler config, per-pod override via annotation `nfd.k8s-sigs.io/compatibility-policy`.
@@ -229,7 +229,6 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - During ICQ status computation, the scheduler plugin identifies ungrouped nodes: `ungroupedNodes = allNodes - ∪(all pre-group status.nodes)`.
    - Ungrouped nodes are evaluated individually using per-node matching.
    - Matching ungrouped nodes are added to `status.compatibleNodes` alongside matched pre-group nodes.
-   - This ensures that ungrouped nodes are not excluded from compatibility scheduling, while maintaining the performance benefits of pre-grouping for grouped nodes.
    - If all nodes are ungrouped, the system degrades gracefully to full per-node scanning (O(N) complexity).
 
 9. **Multi-Image Pod Handling (Filter Phase):**
@@ -244,13 +243,11 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - This set is then intersected with nodes selected by affinity/nodeSelector rules (handled by native Kubernetes scheduler plugins).
    - A node must satisfy both compatibility requirements AND affinity/nodeSelector constraints.
    - Example: compatibility filtering selects nodes 1-500, node affinity selects nodes 300-800 → final candidate nodes are 300-500 (intersection).
-   - Ensures backward compatibility with existing Pod specs that use affinity/nodeSelector.
 
 11. **PreBind Validation (Final Validation):**
    - The PreBind phase provides real-time validation using the latest node features from informer cache.
    - Catches race conditions where ICQ status might be stale due to delayed informer updates.
    - If validation fails (e.g., node drifted between Prefilter and PreBind), the binding is rejected and the pod is rescheduled to a compatible node.
-   - Overhead is minimal (< 1ms) since it only validates the single selected node.
 
 #### Exception Handling
 
@@ -309,22 +306,17 @@ To ensure the proper functioning of the compatibility scheduler plugin, the foll
 - Core Functionality Implementation: Complete the core development of the image compatibility scheduling plugin and NFG features.
 - Basic Verification: Complete full E2E testing in a 100-node cluster to ensure all features are fully operational.
 #### Beta
-- Scalability Simulation: Complete simulation verification on a 5,000-node cluster, meeting warm-cache test baseline (P99 Pod-Arrival-to-Bind < 100ms).
-- Fault Tolerance: Validate system recovery capabilities under abnormal scenarios (e.g., Registry latency/downtime, NFD-Master restarts), achieving a success rate greater than 99.9% (pods bound within 5s).
+- Scalability Simulation: Complete simulation verification on a 5,000-node cluster, meeting test baseline (P99 Pod-Arrival-to-Bind < 2s).
+- Fault Tolerance: Validate graceful degradation under abnormal scenarios (e.g., Registry latency/downtime, NFD-Master restarts).
 #### GA
-- Extreme Performance & Production Verification: Complete long-term stability testing at a scale of 10,000 nodes, meeting warm-cache test baseline (P99 Pod-Arrival-to-Bind < 200ms).
+- Extreme Performance & Production Verification: Complete long-term stability testing at a scale of 10,000 nodes, meeting test baseline (P99 Pod-Arrival-to-Bind < 4s).
 - Production Adoption: Gather deployment cases and performance feedback reports under real-world workloads from at least 2 independent production environments.
 
 ## Implementation History
 - 2025-12-27: KEP proposal submission
-- 2026-01-20: Update KEP with proposal C(Node pre-grouping) chosen as preferred solution.
-- 2026-06-15: Update KEP with refined architecture:
-  - Introduce `ImageCompatibilityQuery` CRD (separate from `NodeFeatureGroup`)
-  - Clarify component responsibilities: Webhook creates ICQ spec, Scheduler Plugin computes status, nfd-master updates NFG only
-  - Add PreBind validation for real-time drift detection
-  - Add post-scheduling drift detection with label + log + event alerting
-  - Remove explicit `Homogeneous` field; use internal homogeneity detection
-  - Remove webhook in-memory LRU cache; ICQ CR itself serves as persistent cache
+- 2026-01-20: Update KEP with proposal C (Node pre-grouping) chosen as preferred solution.
+- 2026-06-30: Update KEP with refined architecture.
+
 ## Alternatives Considered
 
 ### Use Node Affinity/Node Selector Directly in Pod Spec
