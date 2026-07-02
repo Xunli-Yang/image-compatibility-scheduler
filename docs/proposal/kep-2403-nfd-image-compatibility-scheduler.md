@@ -78,7 +78,7 @@ The core of this proposal is to implement an `ImageCompatibilityPlugin` within t
 
 **Component Responsibilities:**
 - **Mutating Webhook**: Parses OCI artifacts during Pod admission. Checks if ICQ already exists (by image digest); if not, fetches OCI artifact and creates ICQ CR with `spec.compatibilityRules` only (no status computation). The ICQ CR itself serves as persistent cache.
-- **Scheduler Plugin**: Computes and updates `status.compatibleNodes` for ICQs, performs PreBind validation, and detects post-scheduling drift.
+- **Scheduler Plugin**: Computes and updates `status.compatibleNodes` for ICQs, performs fiterPreBind validation.
 - **nfd-master**: Updates `NodeFeatureGroup` status for admin-defined pre-groups only, manages the homogeneity labels of pre-groups, and detects post-scheduling drift by comparing drifted node features against ICQ compatibility rules.
 
 ### Proposal C: Node Pre-grouping
@@ -221,7 +221,8 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
    - **ImageCompatibility Controller:** An asynchronous controller within nfd-master that checks homogeneity for each pre-group NFG against each ICQ and updates labels.
    - **Check Algorithm:**
      1. Extract ICQ dimensions from `spec.compatibilityRules` (e.g., `[kernel.version, cpu.cpuid.AVX2]`).
-     2. For each pre-group NFG, check if all nodes in the group have the same values for these ICQ dimensions
+     2. For each node in the pre-group, compute a hash of its feature values for the ICQ dimensions: `hash = SHA256(kernel.version + cpu.cpuid.AVX2)`.
+     3. For each pre-group NFG, check if all nodes in the group have the same hash value.
    - **Trigger Events:** ICQ creation/update, NodeFeature changes.
    - **Label Format:** `nfd.k8s-sigs.io/homogeneous-for-{icq-name}: "true"|"false"`.
 
