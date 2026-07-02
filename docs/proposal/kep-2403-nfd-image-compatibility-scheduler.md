@@ -62,7 +62,7 @@ When deploying applications that require specific hardware or software features 
 #### Node Features Drift Handling
 When node features drift over time (e.g., due to software updates or hardware changes), it can lead to mismatches between the pre-group definitions and the actual node capabilities. This drift can compromise the effectiveness of the pre-grouping strategy.
 It can be divided into two scenarios:
-1. **Drift Before Scheduling:** The nfd-master detects feature drift and updates the pre-group(`NodeFeatureGroup`) status accordingly. Drifted nodes are automatically removed from `NodeFeatureGroup` status. Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
+1. **Drift Before Scheduling:** The nfd-master detects feature drift and fetch the ICQ feature dimensions to validate the homogeneity of pre-groups(`NodeFeatureGroup`). Additionally, the **PreBind phase** performs real-time validation using the latest node features, catching any race conditions where ICQ status might be stale.
 2. **Drift After Scheduling:** When drift happens after a pod has been scheduled, nfd-master detects the drifted node features, evaluates which ICQs are affected by comparing the drifted features against `spec.compatibilityRules`, finds pods bound to the drifted nodes via ICQ references, and alerts administrators through:
    - **Pod labels**: `nfd.k8s-sigs.io/compatibility-drift: "true"`, `nfd.k8s-sigs.io/drift-node`, `nfd.k8s-sigs.io/drift-time`
    - **Structured logs**: JSON format with pod/node/image/drifted_features details
@@ -161,8 +161,8 @@ Assume a cluster with 10,000 nodes pre-grouped into 10 groups (`Group-1` to `Gro
 - For the 2nd and 3rd replicas: webhook finds ICQs already exist → reuses them (no registry fetch). Only 2 registry fetches total for all 3 Pods.
 
 **Phase 3: Homogeneity Check (nfd-master, triggered by ICQ creation)**
-- nfd-master watches ICQ creation events via informer.
-- When new ICQ is created (e.g., `icq-aaa-xxx`), nfd-master extracts compatibility dimensions from `spec.compatibilityRules` (e.g., kernel.version, cpu.cpuid.AVX2).
+- nfd-master watches node feature drift event and ICQ creation events via informer.
+- When new ICQ is created (e.g., `icq-aaa-xxx`) or node feature drift is detected, nfd-master extracts compatibility dimensions from ICQ `spec.compatibilityRules` (e.g., kernel.version, cpu.cpuid.AVX2).
 - For each pre-group, checks if all nodes have the same values for these dimensions:
   - `Group-1` is homogeneous → label `nfd.k8s-sigs.io/homogeneous-for-icq-aaa-xxx: "true"`.
   - `Group-3` is heterogeneous (mixed AVX2 support) → label `nfd.k8s-sigs.io/homogeneous-for-icq-aaa-xxx: "false"`.
